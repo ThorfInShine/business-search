@@ -1,16 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchCSVData, parseUploadedCSV } from './services/csvService';
+import { fetchCSVData, parseUploadedCSV, fetchCSVDataWithCacheBust } from './services/csvService';
 import { 
   processCSVData, 
   searchBusinesses, 
   filterByCategory, 
   getUniqueCategories 
 } from './utils/dataProcessor';
-import { 
-  updateGoogleSheets, 
-  updateLocalData, 
-  saveToLocalStorage 
-} from './services/sheetsUpdateService';
 import { usePagination } from './hooks/usePagination';
 import BusinessList from './components/BusinessList';
 import BusinessDetail from './components/BusinessDetail';
@@ -20,7 +15,6 @@ import FileUpload from './components/FileUpload';
 import SpreadsheetUrlInput from './components/SpreadsheetUrlInput';
 import Pagination from './components/Pagination';
 import LoadingOverlay from './components/LoadingOverlay';
-import StatusEditor from './components/StatusEditor';
 import './App.css';
 
 const App = () => {
@@ -37,7 +31,7 @@ const App = () => {
   const [customSpreadsheet, setCustomSpreadsheet] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [editingBusiness, setEditingBusiness] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Ref untuk melacak apakah detail sedang terbuka
   const isDetailOpenRef = useRef(false);
@@ -51,6 +45,7 @@ const App = () => {
     currentData,
     handlePageChange,
     resetPagination,
+    restorePagination,
     itemsPerPage,
     scrollBusinessListToTop,
     setDetailOpen
@@ -186,20 +181,171 @@ const App = () => {
   // Handle escape key to close detail panel
   useEffect(() => {
     const handleEscape = (e) => {
-      if (e.key === 'Escape') {
-        if (editingBusiness) {
-          handleCloseStatusEditor();
-        } else if (selectedBusiness) {
-          handleCloseBusiness();
-        }
+      if (e.key === 'Escape' && selectedBusiness) {
+        handleCloseBusiness();
       }
     };
 
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [selectedBusiness, editingBusiness]);
+  }, [selectedBusiness]);
 
-  // Load data dari spreadsheet
+  // Fungsi load data yang mempertahankan state
+  const loadBusinessDataPreserveState = async (spreadsheetId, sheetId, preservedState = null) => {
+    try {
+      setLoading(true);
+      setPageLoading(false);
+      setError(null);
+      
+      if (!spreadsheetId) {
+        throw new Error('Spreadsheet ID diperlukan');
+      }
+      
+      const rawData = await fetchCSVData(spreadsheetId, sheetId);
+      const processedData = processCSVData(rawData);
+      
+      setAllBusinesses(processedData);
+      setCategories(getUniqueCategories(processedData));
+      setDataSource('google-sheets');
+      setCustomSpreadsheet({ spreadsheetId, sheetId });
+      
+      // RESTORE STATE jika ada
+      if (preservedState) {
+        console.log('🔄 Restoring preserved state:', preservedState);
+        
+        // Restore filter state tanpa trigger effect
+        lastFilterStateRef.current = { 
+          searchTerm: preservedState.searchTerm, 
+          selectedCategory: preservedState.selectedCategory 
+        };
+        
+        // Set search term dan category langsung tanpa trigger effect
+        setSearchTerm(preservedState.searchTerm);
+        setSelectedCategory(preservedState.selectedCategory);
+        
+        // Restore selected business jika masih ada
+        if (preservedState.selectedBusiness) {
+          const restoredBusiness = processedData.find(
+            business => business.id === preservedState.selectedBusiness.id || 
+                       business.namaUsaha === preservedState.selectedBusiness.namaUsaha
+          );
+          
+          if (restoredBusiness) {
+            setSelectedBusiness(restoredBusiness);
+            isDetailOpenRef.current = preservedState.isDetailOpen;
+            setDetailOpen(preservedState.isDetailOpen);
+          }
+        }
+        
+        // Set timeout untuk restore pagination setelah filter applied
+        setTimeout(() => {
+          if (preservedState.currentPage > 1) {
+            console.log('🔄 Restoring page:', preservedState.currentPage);
+            restorePagination(preservedState.currentPage);
+          }
+        }, 500);
+      } else {
+        // Reset filter state untuk load normal
+        lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
+      }
+      
+      console.log(`Memuat ${processedData.length} data usaha dari spreadsheet`);
+      
+    } catch (err) {
+      console.error('Error loading business data:', err);
+      setError(`Gagal memuat data: ${err.message}`);
+    } finally {
+      setLoading(false);
+      setPageLoading(false);
+    }
+  };
+
+  // Modifikasi fungsi loadBusinessDataWithCacheBust untuk menerima preservedState
+  const loadBusinessDataWithCacheBust = async (spreadsheetId, sheetId, timestamp, preservedState = null) => {
+    try {
+      setLoading(true);
+      setPageLoading(false);
+      setError(null);
+      
+      if (!spreadsheetId) {
+        throw new Error('Spreadsheet ID diperlukan');
+      }
+      
+      console.log('🔄 Force loading with cache bust:', timestamp);
+      
+      // Gunakan fetchCSVData dengan parameter tambahan untuk cache busting
+      const rawData = await fetchCSVDataWithCacheBust(spreadsheetId, sheetId, timestamp);
+      const processedData = processCSVData(rawData);
+      
+      console.log('📊 New data loaded:', processedData.length, 'items');
+      
+      // Log sample untuk debugging
+      if (processedData.length > 0) {
+        const statusCounts = {};
+        processedData.forEach(item => {
+          statusCounts[item.statusEntri] = (statusCounts[item.statusEntri] || 0) + 1;
+        });
+        console.log('📈 Status distribution after refresh:', statusCounts);
+      }
+      
+      // Set data baru
+      setAllBusinesses(processedData);
+      setCategories(getUniqueCategories(processedData));
+      setDataSource('google-sheets');
+      setCustomSpreadsheet({ spreadsheetId, sheetId });
+      
+      // RESTORE STATE jika ada
+      if (preservedState) {
+        console.log('🔄 Restoring preserved state after cache bust:', preservedState);
+        
+        // Restore filter state tanpa trigger effect
+        lastFilterStateRef.current = { 
+          searchTerm: preservedState.searchTerm, 
+          selectedCategory: preservedState.selectedCategory 
+        };
+        
+        // Set search term dan category langsung tanpa trigger effect
+        setSearchTerm(preservedState.searchTerm);
+        setSelectedCategory(preservedState.selectedCategory);
+        
+        // Restore selected business jika masih ada
+        if (preservedState.selectedBusiness) {
+          const restoredBusiness = processedData.find(
+            business => business.id === preservedState.selectedBusiness.id || 
+                       business.namaUsaha === preservedState.selectedBusiness.namaUsaha
+          );
+          
+          if (restoredBusiness) {
+            setSelectedBusiness(restoredBusiness);
+            isDetailOpenRef.current = preservedState.isDetailOpen;
+            setDetailOpen(preservedState.isDetailOpen);
+          }
+        }
+        
+        // Set timeout untuk restore pagination setelah filter applied
+        setTimeout(() => {
+          if (preservedState.currentPage > 1) {
+            console.log('🔄 Restoring page after cache bust:', preservedState.currentPage);
+            restorePagination(preservedState.currentPage);
+          }
+        }, 500);
+      } else {
+        // Reset filter state untuk load normal
+        lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
+      }
+      
+      console.log('✅ Refresh completed successfully');
+      
+    } catch (err) {
+      console.error('❌ Error loading business data:', err);
+      setError(`Gagal memuat data: ${err.message}`);
+    } finally {
+      setLoading(false);
+      setPageLoading(false);
+    }
+  };
+
+  // Load data dari spreadsheet (normal)
   const loadBusinessData = async (spreadsheetId, sheetId) => {
     try {
       setLoading(true);
@@ -297,66 +443,63 @@ const App = () => {
     setSelectedBusiness(null);
   };
 
-  // Handler untuk edit status
-  const handleEditStatus = (business) => {
-    console.log('Editing status for:', business.namaUsaha);
-    setEditingBusiness(business);
-  };
-
-  // Handler untuk update status
-  const handleStatusUpdate = async (businessId, updates) => {
-    try {
-      console.log('Updating status for business ID:', businessId, 'Updates:', updates);
-      
-      // Update data lokal terlebih dahulu
-      const updatedBusinesses = updateLocalData(allBusinesses, businessId, updates);
-      setAllBusinesses(updatedBusinesses);
-      
-      // Simpan ke localStorage sebagai backup
-      saveToLocalStorage(updatedBusinesses);
-
-      // Jika menggunakan Google Sheets, coba update ke spreadsheet
-      if (dataSource === 'google-sheets' && customSpreadsheet) {
-        try {
-          await updateGoogleSheets(
-            customSpreadsheet.spreadsheetId,
-            customSpreadsheet.sheetId,
-            businessId,
-            updates
-          );
-          console.log('Status berhasil diupdate ke Google Sheets');
-        } catch (error) {
-          console.warn('Gagal update ke Google Sheets, perubahan disimpan lokal:', error);
-          // Bisa tambahkan notifikasi ke user bahwa update lokal berhasil tapi sync ke sheets gagal
-          alert('Status berhasil diupdate secara lokal. Namun gagal sinkronisasi ke Google Sheets.');
-        }
-      }
-
-      // Update filtered data juga
-      const updatedFiltered = updateLocalData(filteredBusinesses, businessId, updates);
-      setFilteredBusinesses(updatedFiltered);
-
-      // Update selected business jika sedang dilihat
-      if (selectedBusiness && selectedBusiness.id === businessId) {
-        setSelectedBusiness({ ...selectedBusiness, ...updates });
-      }
-
-      console.log('Status update completed successfully');
-
-    } catch (error) {
-      console.error('Error updating status:', error);
-      throw error;
-    }
-  };
-
-  // Handler untuk close status editor
-  const handleCloseStatusEditor = () => {
-    setEditingBusiness(null);
-  };
-
-  const handleRefresh = () => {
+  // PERBAIKAN: Fungsi refresh yang mempertahankan halaman dan filter aktif
+  const handleRefresh = async () => {
     if (dataSource === 'google-sheets' && customSpreadsheet) {
-      loadBusinessData(customSpreadsheet.spreadsheetId, customSpreadsheet.sheetId);
+      setIsRefreshing(true);
+      try {
+        setError(null);
+        
+        console.log('🔄 Starting refresh while preserving current state...');
+        
+        // SIMPAN STATE YANG SEDANG AKTIF
+        const currentState = {
+          currentPage: currentPage,
+          searchTerm: searchTerm,
+          selectedCategory: selectedCategory,
+          selectedBusiness: selectedBusiness,
+          isDetailOpen: isDetailOpenRef.current
+        };
+        
+        console.log('💾 Saving current state:', currentState);
+        
+        // Hanya reset data, TIDAK reset filter dan pagination
+        setAllBusinesses([]);
+        setFilteredBusinesses([]);
+        
+        // Tambahkan timestamp untuk cache busting
+        const timestamp = Date.now();
+        
+        // Tunggu sebentar untuk memastikan state ter-reset
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        try {
+          // Coba dengan cache busting dulu
+          await loadBusinessDataWithCacheBust(
+            customSpreadsheet.spreadsheetId, 
+            customSpreadsheet.sheetId,
+            timestamp,
+            currentState // Pass current state untuk restore nanti
+          );
+        } catch (cacheBustError) {
+          console.warn('🔄 Cache bust failed, trying normal reload...', cacheBustError.message);
+          
+          // Fallback ke load normal jika cache busting gagal
+          await loadBusinessDataPreserveState(
+            customSpreadsheet.spreadsheetId, 
+            customSpreadsheet.sheetId,
+            currentState
+          );
+        }
+        
+        console.log('✅ Refresh completed while preserving state');
+        
+      } catch (error) {
+        console.error('❌ Error during refresh:', error);
+        setError(`Gagal menyinkronkan data: ${error.message}`);
+      } finally {
+        setIsRefreshing(false);
+      }
     }
   };
 
@@ -364,13 +507,13 @@ const App = () => {
     setAllBusinesses([]);
     setFilteredBusinesses([]);
     setSelectedBusiness(null);
-    setEditingBusiness(null);
     setSearchTerm('');
     setSelectedCategory('all');
     setCategories([]);
     setDataSource(null);
     setCustomSpreadsheet(null);
     setPageLoading(false);
+    setIsRefreshing(false);
     isDetailOpenRef.current = false;
     setDetailOpen(false);
     resetPagination(true);
@@ -413,7 +556,7 @@ const App = () => {
 
         <div className="loading">
           <div className="spinner-large"></div>
-          <p>Memuat data usaha...</p>
+          <p>{isRefreshing ? 'Menyinkronkan data...' : 'Memuat data usaha...'}</p>
         </div>
       </div>
     );
@@ -462,8 +605,13 @@ const App = () => {
           {dataSource && (
             <div className="header-actions">
               {dataSource === 'google-sheets' && customSpreadsheet && (
-                <button onClick={handleRefresh} className="refresh-btn">
-                  🔄 <span>SINKRONISASI DATA</span>
+                <button 
+                  onClick={handleRefresh} 
+                  className="refresh-btn"
+                  disabled={loading || isRefreshing}
+                >
+                  {isRefreshing ? '⏳' : '🔄'} 
+                  <span>{isRefreshing ? 'MENYINKRONKAN...' : 'SINKRONISASI DATA'}</span>
                 </button>
               )}
               <button onClick={resetData} className="reset-btn">
@@ -553,7 +701,6 @@ const App = () => {
                   businesses={currentData}
                   selectedBusiness={selectedBusiness}
                   onSelectBusiness={handleSelectBusiness}
-                  onEditStatus={handleEditStatus}
                 />
                 
                 {currentData.length === 0 && filteredBusinesses.length > 0 && (
@@ -585,7 +732,6 @@ const App = () => {
         )}
       </div>
 
-      {/* Detail Panel */}
       <div className={`business-detail-container ${selectedBusiness ? 'open' : ''}`}>
         {selectedBusiness && (
           <BusinessDetail 
@@ -594,15 +740,6 @@ const App = () => {
           />
         )}
       </div>
-
-      {/* Status Editor Modal */}
-      {editingBusiness && (
-        <StatusEditor
-          business={editingBusiness}
-          onStatusUpdate={handleStatusUpdate}
-          onClose={handleCloseStatusEditor}
-        />
-      )}
     </div>
   );
 };

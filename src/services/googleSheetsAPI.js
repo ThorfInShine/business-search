@@ -72,6 +72,77 @@ export const fetchGoogleSheetsDataPublic = async (spreadsheetId, sheetId = '0') 
   }
 };
 
+// Fungsi dengan cache busting yang kompatibel dengan CORS
+export const fetchGoogleSheetsDataWithCacheBust = async (spreadsheetId, sheetId = '0', timestamp) => {
+  try {
+    // Gunakan parameter URL untuk cache busting saja, tanpa custom headers
+    const cacheBustParam = `&cb=${timestamp}&_=${Date.now()}&rand=${Math.random().toString(36).substring(7)}`;
+    const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=${sheetId}${cacheBustParam}`;
+    
+    console.log('🔄 Fetching with cache bust URL:', url);
+    
+    // Gunakan fetch tanpa custom headers yang bermasalah
+    const response = await fetch(url, {
+      method: 'GET',
+      // Hapus headers yang menyebabkan CORS error
+      mode: 'cors'
+    });
+    
+    if (!response.ok) {
+      if (response.status === 400) {
+        throw new Error('Spreadsheet tidak ditemukan atau tidak dapat diakses. Pastikan link benar dan spreadsheet dapat diakses publik.');
+      } else if (response.status === 403) {
+        throw new Error('Akses ditolak. Pastikan spreadsheet dapat diakses oleh "Anyone with the link".');
+      } else {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+    }
+    
+    const text = await response.text();
+    
+    // Check if response is valid
+    if (!text.includes('google.visualization.Query.setResponse')) {
+      throw new Error('Response tidak valid dari Google Sheets. Pastikan spreadsheet dapat diakses publik.');
+    }
+    
+    console.log('📊 Fresh data received, length:', text.length);
+    
+    // Parse Google's JSON response
+    const jsonString = text.substring(47).slice(0, -2);
+    const data = JSON.parse(jsonString);
+    
+    if (!data.table || !data.table.rows || data.table.rows.length === 0) {
+      throw new Error('Sheet tidak memiliki data atau sheet ID salah');
+    }
+    
+    // Convert to usable format
+    const headers = data.table.cols.map((col, index) => {
+      return col.label || col.id || `Column_${index + 1}`;
+    });
+    
+    const rows = data.table.rows.map((row, rowIndex) => {
+      const rowData = {};
+      headers.forEach((header, index) => {
+        const cell = row.c[index];
+        rowData[header] = cell ? (cell.v !== null ? String(cell.v) : '') : '';
+      });
+      return rowData;
+    });
+    
+    // Filter out empty rows
+    const filteredRows = rows.filter(row => {
+      return Object.values(row).some(value => value && value.toString().trim() !== '');
+    });
+    
+    console.log(`✅ Successfully fetched ${filteredRows.length} fresh rows from Google Sheets`);
+    
+    return filteredRows;
+  } catch (error) {
+    console.error('❌ Error fetching fresh Google Sheets data:', error);
+    throw error;
+  }
+};
+
 // Method 2: Menggunakan CSV export (fallback)
 export const fetchGoogleSheetsAsCSV = async (spreadsheetId, sheetId = '0') => {
   try {
@@ -102,6 +173,44 @@ export const fetchGoogleSheetsAsCSV = async (spreadsheetId, sheetId = '0') => {
     return csvText;
   } catch (error) {
     console.error('Error fetching CSV from Google Sheets:', error);
+    throw error;
+  }
+};
+
+// Method 3: CSV export dengan cache busting
+export const fetchGoogleSheetsAsCSVWithCacheBust = async (spreadsheetId, sheetId = '0', timestamp) => {
+  try {
+    const cacheBustParam = `&cb=${timestamp}&_=${Date.now()}&rand=${Math.random().toString(36).substring(7)}`;
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}${cacheBustParam}`;
+    
+    console.log('🔄 Fetching CSV with cache bust:', csvUrl);
+    
+    const response = await fetch(csvUrl, {
+      method: 'GET',
+      mode: 'cors'
+    });
+    
+    if (!response.ok) {
+      if (response.status === 400) {
+        throw new Error('Spreadsheet tidak ditemukan atau sheet ID salah');
+      } else if (response.status === 403) {
+        throw new Error('Akses ditolak. Pastikan spreadsheet dapat diakses publik');
+      } else {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+    }
+    
+    const csvText = await response.text();
+    
+    if (!csvText || csvText.trim() === '') {
+      throw new Error('Spreadsheet kosong atau tidak memiliki data');
+    }
+    
+    console.log('📊 Fresh CSV data length:', csvText.length);
+    
+    return csvText;
+  } catch (error) {
+    console.error('❌ Error fetching CSV with cache bust:', error);
     throw error;
   }
 };

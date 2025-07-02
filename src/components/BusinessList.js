@@ -1,8 +1,8 @@
-// File: components/BusinessList.js
 import React, { memo, useRef, useEffect } from 'react';
 
-const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => {
+const BusinessCard = memo(({ business, isSelected, onSelect }) => {
   const handleCardClick = (e) => {
+    // Pastikan tidak ada event bubbling
     e.preventDefault();
     e.stopPropagation();
     onSelect(business);
@@ -10,7 +10,7 @@ const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => 
 
   const handleActionClick = (e, action, value) => {
     e.preventDefault();
-    e.stopPropagation();
+    e.stopPropagation(); // Penting: stop propagation
     
     switch (action) {
       case 'phone':
@@ -24,14 +24,12 @@ const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => 
           window.open(`https://maps.google.com/?q=${business.latitude},${business.longitude}`, '_blank');
         }
         break;
-      case 'edit-status':
-        onEditStatus(business);
-        break;
       default:
         break;
     }
   };
 
+  // Fungsi untuk mendapatkan class status
   const getStatusClass = (status) => {
     switch (status) {
       case 'Sudah':
@@ -52,20 +50,11 @@ const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => 
       <div className="business-header">
         <div className="business-title-section">
           <h3 className="business-name">{business.namaUsaha}</h3>
+          {/* Status Badge */}
           <div className="status-info">
-            <div className="status-row">
-              <span className={`status-badge ${getStatusClass(business.statusEntri)}`}>
-                {business.statusEntri || 'Belum'}
-              </span>
-              <button 
-                className="edit-status-btn"
-                onClick={(e) => handleActionClick(e, 'edit-status')}
-                title="Edit Status"
-                aria-label="Edit status entri"
-              >
-                ✏️
-              </button>
-            </div>
+            <span className={`status-badge ${getStatusClass(business.statusEntri)}`}>
+              {business.statusEntri || 'Belum'}
+            </span>
             {business.namaPetugas && (
               <span className="petugas-info">
                 👤 {business.namaPetugas}
@@ -106,6 +95,7 @@ const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => 
             </span>
           </div>
 
+          {/* Tampilkan kegiatan jika ada */}
           {business.kegiatan && (
             <div className="info-item">
               <span className="info-label">🔧 KEGIATAN</span>
@@ -173,7 +163,7 @@ const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => 
         )}
         <button 
           className="action-btn detail-btn"
-          onClick={handleCardClick}
+          onClick={handleCardClick} // Gunakan handleCardClick yang sama
           title="Lihat Detail"
           aria-label={`Lihat detail ${business.namaUsaha}`}
         >
@@ -184,9 +174,10 @@ const BusinessCard = memo(({ business, isSelected, onSelect, onEditStatus }) => 
   );
 });
 
-const BusinessList = ({ businesses, selectedBusiness, onSelectBusiness, onEditStatus }) => {
+const BusinessList = ({ businesses, selectedBusiness, onSelectBusiness }) => {
   const listRef = useRef(null);
 
+  // Scroll to top when businesses change (new page)
   useEffect(() => {
     if (listRef.current) {
       listRef.current.scrollTo({
@@ -213,7 +204,6 @@ const BusinessList = ({ businesses, selectedBusiness, onSelectBusiness, onEditSt
           business={business}
           isSelected={selectedBusiness?.id === business.id}
           onSelect={onSelectBusiness}
-          onEditStatus={onEditStatus}
         />
       ))}
     </div>

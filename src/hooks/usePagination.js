@@ -78,6 +78,22 @@ export const usePagination = (data, itemsPerPage = 1000) => {
     }, 100);
   }, [totalItems, scrollBusinessListToTop]);
 
+  // TAMBAHAN: Fungsi untuk restore pagination ke halaman tertentu
+  const restorePagination = useCallback((pageNumber) => {
+    const targetPage = parseInt(pageNumber);
+    
+    if (isNaN(targetPage) || targetPage < 1 || targetPage > totalPages) {
+      console.warn(`Cannot restore to invalid page: ${pageNumber}. Staying on page 1.`);
+      setCurrentPage(1);
+      return;
+    }
+    
+    console.log(`Restoring pagination to page ${targetPage}`);
+    setCurrentPage(targetPage);
+    
+    // Jangan scroll otomatis saat restore
+  }, [totalPages]);
+
   // Set detail status
   const setDetailOpen = useCallback((isOpen) => {
     console.log('Setting detail open:', isOpen);
@@ -103,6 +119,7 @@ export const usePagination = (data, itemsPerPage = 1000) => {
     currentData,
     handlePageChange,
     resetPagination,
+    restorePagination, // TAMBAHAN: export fungsi restore
     itemsPerPage,
     businessListRef,
     scrollBusinessListToTop,
