@@ -582,7 +582,7 @@ const App = () => {
       
       <div className="app-content">
         <header className="app-header">
-          <h1>⚡ DIREKTORI USAHA NEXUS</h1>
+          <h1>⚡ DIREKTORI USAHA</h1>
           <p>
             {allBusinesses.length > 0 
               ? `Sistem intelijen bisnis canggih yang mengelola ${allBusinesses.length.toLocaleString()} entitas usaha dengan teknologi terdepan`
