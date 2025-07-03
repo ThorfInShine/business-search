@@ -1,23 +1,173 @@
-// Fungsi untuk membersihkan dan memproses data CSV
-export const processCSVData = (rawData) => {
-  console.log('Processing raw data:', rawData);
-  console.log('Raw data length:', rawData?.length);
+// Fungsi untuk membuat identifier unik berdasarkan kombinasi field
+const createUniqueIdentifier = (business) => {
+  const name = business.namaUsaha?.toLowerCase().trim() || ''
+  const address = business.alamat?.toLowerCase().trim() || ''
+  const kecamatan = business.kecamatan?.toLowerCase().trim() || ''
+  const phone = business.noTelp?.replace(/\D/g, '') || '' // Remove non-digits
+  
+  // Kombinasi nama + alamat + kecamatan sebagai identifier utama
+  let identifier = `${name}_${address}_${kecamatan}`
+  
+  // Jika ada nomor telepon, tambahkan sebagai identifier alternatif
+  if (phone.length >= 8) { // Minimal 8 digit untuk nomor telepon valid
+    identifier += `_${phone}`
+  }
+  
+  return identifier
+}
+
+// ENHANCED: Remove duplicates with detailed logging
+const removeDuplicatesFromArray = (dataArray) => {
+  const seen = new Set();
+  const seenPhones = new Set();
+  const unique = [];
+  const duplicates = [];
+  
+  console.log(`🔍 Starting array deduplication of ${dataArray.length} items...`);
+  
+  for (const item of dataArray) {
+    const identifier = createUniqueIdentifier(item);
+    const phone = item.noTelp?.replace(/\D/g, '') || '';
+    
+    // Check primary identifier (nama + alamat + kecamatan)
+    if (!seen.has(identifier)) {
+      // Check phone number as secondary deduplication
+      if (phone.length >= 8 && seenPhones.has(phone)) {
+        console.log(`📞 Duplicate phone detected, skipping: ${item.namaUsaha} (${phone})`);
+        duplicates.push({
+          reason: 'duplicate_phone',
+          name: item.namaUsaha,
+          phone: phone,
+          identifier: identifier
+        });
+        continue;
+      }
+      
+      seen.add(identifier);
+      if (phone.length >= 8) {
+        seenPhones.add(phone);
+      }
+      
+      // Set the identifier for reference
+      item._uniqueIdentifier = identifier;
+      unique.push(item);
+    } else {
+      console.log(`🔄 Duplicate detected and removed: ${item.namaUsaha} (${identifier})`);
+      duplicates.push({
+        reason: 'duplicate_identifier',
+        name: item.namaUsaha,
+        identifier: identifier,
+        phone: phone
+      });
+    }
+  }
+  
+  // Detailed summary
+  console.log(`🧹 Array deduplication complete:`);
+  console.log(`   - Original: ${dataArray.length}`);
+  console.log(`   - Unique: ${unique.length}`);
+  console.log(`   - Duplicates removed: ${duplicates.length}`);
+  
+  // Group duplicates by reason
+  const duplicatesByReason = duplicates.reduce((acc, dup) => {
+    acc[dup.reason] = (acc[dup.reason] || 0) + 1;
+    return acc;
+  }, {});
+  
+  console.log(`   - Duplicate breakdown:`, duplicatesByReason);
+  
+  // Show sample duplicates
+  if (duplicates.length > 0) {
+    console.log(`   - Sample duplicates:`, duplicates.slice(0, 3));
+  }
+  
+  return unique;
+};
+
+// Fungsi untuk membersihkan status toko
+const cleanStatusToko = (status) => {
+  console.log('Cleaning status toko:', status, typeof status);
+  
+  if (!status) {
+    return 'BUKA';
+  }
+  
+  const cleanStatus = String(status).trim().toLowerCase();
+  console.log('Clean status:', cleanStatus);
+  
+  // Mapping status toko
+  const statusMap = {
+    // Buka
+    'buka': 'BUKA',
+    'open': 'BUKA',
+    'aktif': 'BUKA',
+    'beroperasi': 'BUKA',
+    'operasional': 'BUKA',
+    'ya': 'BUKA',
+    'yes': 'BUKA',
+    '1': 'BUKA',
+    'true': 'BUKA',
+    'sudah': 'BUKA',
+    'selesai': 'BUKA',
+    'complete': 'BUKA',
+    'completed': 'BUKA',
+    'done': 'BUKA',
+    'finished': 'BUKA',
+    'ok': 'BUKA',
+    'iya': 'BUKA',
+    'success': 'BUKA',
+    'berhasil': 'BUKA',
+    
+    // Tutup
+    'tutup': 'TUTUP',
+    'closed': 'TUTUP',
+    'tidak aktif': 'TUTUP',
+    'non-aktif': 'TUTUP',
+    'tidak beroperasi': 'TUTUP',
+    'tidak': 'TUTUP',
+    'no': 'TUTUP',
+    '0': 'TUTUP',
+    'false': 'TUTUP',
+    'belum': 'TUTUP',
+    'pending': 'TUTUP',
+    'incomplete': 'TUTUP',
+    'kosong': 'TUTUP',
+    'empty': 'TUTUP',
+    'tidak lengkap': 'TUTUP',
+    'kurang': 'TUTUP'
+  };
+  
+  const result = statusMap[cleanStatus] || 'BUKA';
+  console.log('Status result:', result);
+  
+  return result;
+};
+
+// ENHANCED: Process CSV data with optional deduplication
+export const processCSVData = (rawData, options = {}) => {
+  const { skipDeduplication = false } = options;
+  
+  console.log('\n🔄 ===== STARTING DATA PROCESSING =====');
+  console.log('Processing raw data with detailed logging:', rawData?.length);
+  console.log('Skip deduplication:', skipDeduplication);
   
   if (!rawData || rawData.length === 0) {
-    console.log('No raw data to process');
+    console.log('❌ No raw data to process');
     return [];
   }
 
   // Debug: lihat struktur data
   if (rawData.length > 0) {
-    console.log('First row structure:', rawData[0]);
-    console.log('Available keys:', Object.keys(rawData[0] || {}));
+    console.log('📋 First row structure:', rawData[0]);
+    console.log('📋 Available keys:', Object.keys(rawData[0] || {}));
   }
 
+  console.log('⚙️ Processing each row...');
+  
   const processedData = rawData.map((row, index) => {
     // Debug untuk beberapa baris pertama
-    if (index < 5) {
-      console.log(`Row ${index} raw data:`, row);
+    if (index < 3) {
+      console.log(`📝 Processing row ${index + 1}:`, row);
     }
 
     // Ambil data nmsls untuk parsing alamat
@@ -29,11 +179,16 @@ export const processCSVData = (rawData) => {
     // Parse informasi alamat dari nmsls
     const parsedAddress = parseAddressFromNmsls(nmslsRaw);
 
-    // Ambil status entri dengan lebih banyak variasi
-    const statusEntriRaw = getFieldValue(row, [
+    // Ambil status toko dengan lebih banyak variasi
+    const statusTokoRaw = getFieldValue(row, [
       // Variasi umum
       'Status', 'status', 'STATUS', 
-      'status_entri', 'Status Entri', 'STATUS_ENTRI',
+      'status_toko', 'Status Toko', 'STATUS_TOKO',
+      'toko_status', 'Toko Status', 'TOKO_STATUS',
+      'kondisi_toko', 'Kondisi Toko', 'KONDISI_TOKO',
+      'operasional', 'Operasional', 'OPERASIONAL',
+      'buka_tutup', 'Buka Tutup', 'BUKA_TUTUP',
+      'status_entri', 'Status Entri', 'STATUS_ENTRI', // Backward compatibility
       'entry_status', 'Entry Status', 'ENTRY_STATUS', 
       'kondisi', 'Kondisi', 'KONDISI',
       'keterangan_status', 'Keterangan Status', 'progress', 'Progress', 'PROGRESS',
@@ -54,7 +209,10 @@ export const processCSVData = (rawData) => {
         key.toLowerCase().includes('status') || 
         key.toLowerCase().includes('entri') ||
         key.toLowerCase().includes('sudah') ||
-        key.toLowerCase().includes('selesai')
+        key.toLowerCase().includes('selesai') ||
+        key.toLowerCase().includes('toko') ||
+        key.toLowerCase().includes('buka') ||
+        key.toLowerCase().includes('tutup')
       )
     ]);
 
@@ -93,12 +251,19 @@ export const processCSVData = (rawData) => {
       )
     ]);
 
+    // Get nama usaha
+    const namaUsaha = cleanString(getFieldValue(row, [
+      'NamaUsaha', 'namaUsaha', 'Nama Usaha', 'nama_usaha', 'nama usaha', 'NAMA_USAHA', 'NAMA USAHA'
+    ]));
+
     // Debug untuk status dan petugas
-    if (index < 5) {
-      console.log(`Row ${index} - Status raw:`, statusEntriRaw);
-      console.log(`Row ${index} - Petugas raw:`, namaPetugasRaw);
-      console.log(`Row ${index} - Status cleaned:`, cleanStatusEntri(statusEntriRaw));
-      console.log(`Row ${index} - Petugas cleaned:`, cleanString(namaPetugasRaw));
+    if (index < 3) {
+      console.log(`📝 Row ${index + 1} details:`);
+      console.log(`   - Nama Usaha: "${namaUsaha}"`);
+      console.log(`   - Status raw: "${statusTokoRaw}"`);
+      console.log(`   - Petugas raw: "${namaPetugasRaw}"`);
+      console.log(`   - Status cleaned: "${cleanStatusToko(statusTokoRaw)}"`);
+      console.log(`   - Petugas cleaned: "${cleanString(namaPetugasRaw)}"`);
     }
 
     // Bersihkan data dan berikan default values untuk semua field
@@ -106,9 +271,7 @@ export const processCSVData = (rawData) => {
       id: index + 1,
       
       // Informasi Dasar Usaha
-      namaUsaha: cleanString(getFieldValue(row, [
-        'NamaUsaha', 'namaUsaha', 'Nama Usaha', 'nama_usaha', 'nama usaha', 'NAMA_USAHA', 'NAMA USAHA'
-      ])),
+      namaUsaha: namaUsaha,
       
       // Lokasi - Gabungkan alamat asli dengan info dari nmsls
       alamat: cleanString(getFieldValue(row, [
@@ -176,8 +339,8 @@ export const processCSVData = (rawData) => {
         'bidang_usaha', 'Bidang Usaha', 'BIDANG_USAHA', 'bidang usaha'
       ])),
       
-      // Status Entri dan Petugas - Gunakan nilai yang sudah diambil
-      statusEntri: cleanStatusEntri(statusEntriRaw),
+      // Status Toko dan Petugas - Gunakan nilai yang sudah diambil
+      statusToko: cleanStatusToko(statusTokoRaw),
       namaPetugas: cleanString(namaPetugasRaw),
       
       email: cleanEmail(getFieldValue(row, [
@@ -225,28 +388,65 @@ export const processCSVData = (rawData) => {
       ])),
       
       // Data mentah yang sudah difilter
-      rawData: filterUsefulFields(row)
+      rawData: filterUsefulFields(row),
+      
+      // Identifier unik untuk deduplication (will be set later if needed)
+      _uniqueIdentifier: null
     };
 
     // Debug hanya untuk beberapa baris pertama
-    if (index < 5) {
-      console.log(`Processed row ${index}:`, {
+    if (index < 3) {
+      console.log(`✅ Processed row ${index + 1} result:`, {
         namaUsaha: cleanData.namaUsaha,
-        statusEntri: cleanData.statusEntri,
-        namaPetugas: cleanData.namaPetugas
+        statusToko: cleanData.statusToko,
+        namaPetugas: cleanData.namaPetugas,
+        hasValidName: cleanData.namaUsaha.trim() !== ''
       });
     }
     
     return cleanData;
-  }).filter(item => {
+  });
+
+  console.log(`⚙️ Initial processing complete: ${processedData.length} records`);
+
+  // Filter out items without business names
+  const filteredData = processedData.filter(item => {
     const hasName = item.namaUsaha.trim() !== '';
+    if (!hasName && processedData.indexOf(item) < 5) {
+      console.log(`🗑️ Filtering out item without name:`, item);
+    }
     return hasName;
   });
 
-  console.log('Final processed data length:', processedData.length);
-  console.log('Sample processed data:', processedData.slice(0, 2));
+  console.log(`🗑️ After filtering empty names: ${filteredData.length} records`);
+  console.log(`🗑️ Filtered out: ${processedData.length - filteredData.length} records with empty names`);
+
+  // Conditional deduplication
+  let finalData;
+  if (skipDeduplication) {
+    console.log(`🚫 SKIPPING DEDUPLICATION as requested`);
+    finalData = filteredData;
+  } else {
+    console.log(`🧹 Starting deduplication...`);
+    finalData = removeDuplicatesFromArray(filteredData);
+  }
   
-  return processedData;
+  console.log('\n✅ ===== DATA PROCESSING COMPLETE =====');
+  console.log(`📊 Processing summary:`);
+  console.log(`   - Raw input: ${rawData.length}`);
+  console.log(`   - After processing: ${processedData.length}`);
+  console.log(`   - After name filtering: ${filteredData.length}`);
+  if (skipDeduplication) {
+    console.log(`   - Final output (no dedup): ${finalData.length}`);
+    console.log(`   - Total loss: ${rawData.length - finalData.length} (${(((rawData.length - finalData.length)/rawData.length)*100).toFixed(1)}%)`);
+  } else {
+    console.log(`   - After deduplication: ${finalData.length}`);
+    console.log(`   - Total loss: ${rawData.length - finalData.length} (${(((rawData.length - finalData.length)/rawData.length)*100).toFixed(1)}%)`);
+  }
+  
+  console.log('📋 Sample processed data:', finalData.slice(0, 2));
+  
+  return finalData;
 };
 
 // Fungsi untuk parsing informasi alamat dari field nmsls
@@ -412,73 +612,6 @@ const cleanCoordinate = (coord) => {
   return 0;
 };
 
-// PERBAIKAN: Fungsi untuk membersihkan status entri dengan lebih banyak variasi
-const cleanStatusEntri = (status) => {
-  console.log('Cleaning status:', status, typeof status);
-  
-  if (!status) {
-    return 'Belum';
-  }
-  
-  // Konversi ke string dan bersihkan
-  const cleanStatus = String(status).trim().toLowerCase();
-  console.log('Clean status:', cleanStatus);
-  
-  // Mapping berbagai variasi status dengan lebih lengkap
-  const statusMap = {
-    // Sudah
-    'sudah': 'Sudah',
-    'selesai': 'Sudah',
-    'complete': 'Sudah',
-    'completed': 'Sudah',
-    'done': 'Sudah',
-    'finished': 'Sudah',
-    'ok': 'Sudah',
-    'yes': 'Sudah',
-    'ya': 'Sudah',
-    'iya': 'Sudah',
-    '1': 'Sudah',
-    'true': 'Sudah',
-    'success': 'Sudah',
-    'berhasil': 'Sudah',
-    'selesai entri': 'Sudah',
-    'sudah entri': 'Sudah',
-    'entri selesai': 'Sudah',
-    'data lengkap': 'Sudah',
-    'lengkap': 'Sudah',
-    
-    // Progress
-    'progress': 'Progress',
-    'ongoing': 'Progress',
-    'proses': 'Progress',
-    'berjalan': 'Progress',
-    'sedang proses': 'Progress',
-    'dalam proses': 'Progress',
-    'berlangsung': 'Progress',
-    'partial': 'Progress',
-    'sebagian': 'Progress',
-    
-    // Belum
-    'belum': 'Belum',
-    'pending': 'Belum',
-    'incomplete': 'Belum',
-    'no': 'Belum',
-    'tidak': 'Belum',
-    '0': 'Belum',
-    'false': 'Belum',
-    'kosong': 'Belum',
-    'empty': 'Belum',
-    'belum entri': 'Belum',
-    'tidak lengkap': 'Belum',
-    'kurang': 'Belum'
-  };
-  
-  const result = statusMap[cleanStatus] || 'Belum';
-  console.log('Status result:', result);
-  
-  return result;
-};
-
 // Fungsi untuk memfilter field yang berguna saja
 const filterUsefulFields = (row) => {
   const excludedFields = [
@@ -518,8 +651,8 @@ const getReadableFieldName = (fieldName) => {
     'kbli': 'Kode KBLI',
     'Kegiatan': 'Kegiatan Usaha',
     'kegiatan': 'Kegiatan Usaha',
-    'Status': 'Status Entri',
-    'status': 'Status Entri',
+    'Status': 'Status Toko',
+    'status': 'Status Toko',
     'Petugas': 'Nama Petugas',
     'petugas': 'Nama Petugas',
     'omzet': 'Omzet',
@@ -554,7 +687,7 @@ export const searchBusinesses = (businesses, searchTerm) => {
     business.jenisUsaha.toLowerCase().includes(term) ||
     business.kbli.toLowerCase().includes(term) ||
     business.kegiatan.toLowerCase().includes(term) ||
-    business.statusEntri.toLowerCase().includes(term) ||
+    business.statusToko.toLowerCase().includes(term) ||
     business.namaPetugas.toLowerCase().includes(term) ||
     business.nmsls.toLowerCase().includes(term) ||
     business.nmslsParsed.toLowerCase().includes(term) ||
@@ -566,48 +699,55 @@ export const searchBusinesses = (businesses, searchTerm) => {
   );
 };
 
-export const filterByCategory = (businesses, category) => {
-  if (!category || category === 'all') {
+// Mendapatkan daftar kecamatan unik
+export const getUniqueKecamatan = (businesses) => {
+  const kecamatanSet = new Set();
+  
+  businesses.forEach(business => {
+    if (business.kecamatan && business.kecamatan.trim()) {
+      kecamatanSet.add(business.kecamatan.trim());
+    }
+  });
+  
+  return Array.from(kecamatanSet).sort();
+};
+
+// Mendapatkan daftar desa unik (bisa difilter berdasarkan kecamatan)
+export const getUniqueDesa = (businesses, selectedKecamatan = 'all') => {
+  const desaSet = new Set();
+  
+  businesses.forEach(business => {
+    // Filter berdasarkan kecamatan jika dipilih
+    if (selectedKecamatan !== 'all' && business.kecamatan !== selectedKecamatan) {
+      return;
+    }
+    
+    if (business.desa && business.desa.trim()) {
+      desaSet.add(business.desa.trim());
+    }
+  });
+  
+  return Array.from(desaSet).sort();
+};
+
+// Filter berdasarkan kecamatan
+export const filterByKecamatan = (businesses, kecamatan) => {
+  if (!kecamatan || kecamatan === 'all') {
     return businesses;
   }
+  
   return businesses.filter(business => 
-    business.jenisUsaha.toLowerCase() === category.toLowerCase() ||
-    business.kelompokUsaha.toLowerCase() === category.toLowerCase() ||
-    business.bentukUsaha.toLowerCase() === category.toLowerCase()
+    business.kecamatan && business.kecamatan.toLowerCase() === kecamatan.toLowerCase()
   );
 };
 
-export const getUniqueCategories = (businesses) => {
-  const categories = new Set();
-  businesses.forEach(business => {
-    if (business.jenisUsaha) categories.add(business.jenisUsaha);
-    if (business.kelompokUsaha) categories.add(business.kelompokUsaha);
-    if (business.bentukUsaha) categories.add(business.bentukUsaha);
-  });
-  return Array.from(categories).sort();
-};
-
-export const getUniqueRegions = (businesses) => {
-  const regions = new Set();
-  businesses.forEach(business => {
-    if (business.propinsi) regions.add(business.propinsi);
-    if (business.kabupaten) regions.add(business.kabupaten);
-    if (business.kecamatan) regions.add(business.kecamatan);
-    if (business.desa) regions.add(business.desa);
-    if (business.dusun) regions.add(business.dusun);
-  });
-  return Array.from(regions).sort();
-};
-
-export const filterByRegion = (businesses, region) => {
-  if (!region || region === 'all') {
+// Filter berdasarkan desa
+export const filterByDesa = (businesses, desa) => {
+  if (!desa || desa === 'all') {
     return businesses;
   }
+  
   return businesses.filter(business => 
-    business.propinsi === region ||
-    business.kabupaten === region ||
-    business.kecamatan === region ||
-    business.desa === region ||
-    business.dusun === region
+    business.desa && business.desa.toLowerCase() === desa.toLowerCase()
   );
 };

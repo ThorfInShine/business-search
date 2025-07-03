@@ -5,9 +5,23 @@ const Pagination = ({
   totalPages, 
   totalItems, 
   itemsPerPage, 
-  onPageChange 
+  onPageChange,
+  loading = false
 }) => {
   const [inputPage, setInputPage] = useState(currentPage);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Detect mobile screen
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Sync input with current page
   useEffect(() => {
@@ -17,42 +31,51 @@ const Pagination = ({
   const startItem = (currentPage - 1) * itemsPerPage + 1;
   const endItem = Math.min(currentPage * itemsPerPage, totalItems);
 
-  // Generate page numbers to show
+  // Get mobile-friendly button text
+  const getPrevButtonText = () => {
+    if (window.innerWidth <= 375) return "‹ Prev";
+    if (window.innerWidth <= 480) return "‹ Prev";
+    return "← Sebelumnya";
+  };
+
+  const getNextButtonText = () => {
+    if (window.innerWidth <= 375) return "Next ›";
+    if (window.innerWidth <= 480) return "Next ›";
+    return "Selanjutnya →";
+  };
+
+  // Unified pagination - show only essential pages
   const getPageNumbers = () => {
     const pages = [];
-    const maxVisiblePages = 7;
+    const maxVisiblePages = isMobile ? 3 : 5;
     
     if (totalPages <= maxVisiblePages) {
-      // Show all pages if total pages is small
       for (let i = 1; i <= totalPages; i++) {
         pages.push(i);
       }
     } else {
-      // Always show first page
-      pages.push(1);
+      // Show current page and adjacent pages
+      const start = Math.max(1, currentPage - 1);
+      const end = Math.min(totalPages, currentPage + 1);
       
-      // Add dots if there's a gap
-      if (currentPage > 4) {
-        pages.push('...');
-      }
-      
-      // Show pages around current page
-      const start = Math.max(2, currentPage - 1);
-      const end = Math.min(totalPages - 1, currentPage + 1);
-      
-      for (let i = start; i <= end; i++) {
-        if (!pages.includes(i)) {
-          pages.push(i);
+      // Add first page if not in range
+      if (start > 1) {
+        pages.push(1);
+        if (start > 2) {
+          pages.push('...');
         }
       }
       
-      // Add dots if there's a gap
-      if (currentPage < totalPages - 3) {
-        pages.push('...');
+      // Add current range
+      for (let i = start; i <= end; i++) {
+        pages.push(i);
       }
       
-      // Always show last page
-      if (!pages.includes(totalPages) && totalPages > 1) {
+      // Add last page if not in range
+      if (end < totalPages) {
+        if (end < totalPages - 1) {
+          pages.push('...');
+        }
         pages.push(totalPages);
       }
     }
@@ -62,61 +85,35 @@ const Pagination = ({
 
   const pageNumbers = getPageNumbers();
 
-  // Handle page number click
   const handlePageClick = (page) => {
-    if (page !== '...' && page >= 1 && page <= totalPages && page !== currentPage) {
+    if (page !== '...' && page >= 1 && page <= totalPages && page !== currentPage && !loading) {
       onPageChange(page);
     }
   };
 
-  // Handle navigation buttons
-  const handleFirst = () => {
-    if (currentPage !== 1) {
-      onPageChange(1);
-    }
-  };
-
   const handlePrevious = () => {
-    if (currentPage > 1) {
+    if (currentPage > 1 && !loading) {
       onPageChange(currentPage - 1);
     }
   };
 
   const handleNext = () => {
-    if (currentPage < totalPages) {
+    if (currentPage < totalPages && !loading) {
       onPageChange(currentPage + 1);
     }
   };
 
-  const handleLast = () => {
-    if (currentPage !== totalPages) {
-      onPageChange(totalPages);
-    }
-  };
-
-  // Handle input change
-  const handleInputChange = (e) => {
-    const value = e.target.value;
-    // Allow empty or valid numbers
-    if (value === '' || (/^\d+$/.test(value) && parseInt(value) >= 1 && parseInt(value) <= totalPages)) {
-      setInputPage(value === '' ? '' : parseInt(value));
-    }
-  };
-
-  // Handle input submit
   const handleInputSubmit = (e) => {
-    if (e.key === 'Enter' || e.type === 'blur') {
+    if ((e.key === 'Enter' || e.type === 'blur') && !loading) {
       const page = parseInt(inputPage);
       if (page >= 1 && page <= totalPages && page !== currentPage) {
         onPageChange(page);
       } else {
-        // Reset to current page if invalid
         setInputPage(currentPage);
       }
     }
   };
 
-  // Don't render if there's only one page or no pages
   if (totalPages <= 1) {
     return null;
   }
@@ -125,90 +122,68 @@ const Pagination = ({
     <div className="pagination-container">
       {/* Info */}
       <div className="pagination-info">
-        <span>
-          MENAMPILKAN {startItem.toLocaleString()} - {endItem.toLocaleString()} DARI {totalItems.toLocaleString()} USAHA
-        </span>
+        <div className="page-indicator">
+          Halaman <strong>{currentPage}</strong> dari <strong>{totalPages}</strong>
+          {loading && <span className="loading-indicator"> ⏳</span>}
+        </div>
+        <div className="items-info">
+          {startItem.toLocaleString()} - {endItem.toLocaleString()} dari {totalItems.toLocaleString()} usaha
+        </div>
       </div>
 
-      {/* Pagination Controls */}
+      {/* Main Controls - Natural flow: Prev | Numbers | Next */}
       <div className="pagination-controls">
-        {/* Halaman Pertama */}
+        {/* Previous Button */}
         <button 
-          className="pagination-btn"
-          onClick={handleFirst}
-          disabled={currentPage === 1}
-          title="Halaman Pertama"
-          aria-label="Ke halaman pertama"
-        >
-          ⏮️
-        </button>
-
-        {/* Halaman Sebelumnya */}
-        <button 
-          className="pagination-btn"
+          className="pagination-btn prev"
           onClick={handlePrevious}
-          disabled={currentPage === 1}
-          title="Halaman Sebelumnya"
-          aria-label="Ke halaman sebelumnya"
+          disabled={currentPage === 1 || loading}
+          title="Halaman sebelumnya"
         >
-          ⬅️
+          {getPrevButtonText()}
         </button>
 
-        {/* Nomor Halaman */}
+        {/* Page Numbers */}
         <div className="pagination-numbers">
           {pageNumbers.map((page, index) => (
             <button
               key={`${page}-${index}`}
               className={`pagination-number ${page === currentPage ? 'active' : ''} ${page === '...' ? 'dots' : ''}`}
               onClick={() => handlePageClick(page)}
-              disabled={page === '...' || page === currentPage}
-              aria-label={page === '...' ? 'Halaman lainnya' : `Ke halaman ${page}`}
-              title={page === '...' ? 'Halaman lainnya' : `Halaman ${page}`}
+              disabled={page === '...' || page === currentPage || loading}
+              title={page === '...' ? '' : `Ke halaman ${page}`}
             >
               {page}
             </button>
           ))}
         </div>
 
-        {/* Halaman Selanjutnya */}
+        {/* Next Button */}
         <button 
-          className="pagination-btn"
+          className="pagination-btn next"
           onClick={handleNext}
-          disabled={currentPage === totalPages}
-          title="Halaman Selanjutnya"
-          aria-label="Ke halaman selanjutnya"
+          disabled={currentPage === totalPages || loading}
+          title="Halaman selanjutnya"
         >
-          ➡️
-        </button>
-
-        {/* Halaman Terakhir */}
-        <button 
-          className="pagination-btn"
-          onClick={handleLast}
-          disabled={currentPage === totalPages}
-          title="Halaman Terakhir"
-          aria-label="Ke halaman terakhir"
-        >
-          ⏭️
+          {getNextButtonText()}
         </button>
       </div>
 
-      {/* Lompat Cepat */}
+      {/* Quick Jump */}
       <div className="pagination-jump">
-        <span>KE HALAMAN:</span>
+        <span>Langsung ke halaman:</span>
         <input 
           type="number" 
           min="1" 
           max={totalPages}
           value={inputPage}
-          onChange={handleInputChange}
+          onChange={(e) => setInputPage(e.target.value)}
           onKeyPress={handleInputSubmit}
           onBlur={handleInputSubmit}
-          className="page-input"
-          placeholder={currentPage.toString()}
-          aria-label="Masukkan nomor halaman"
+          disabled={loading}
+          className="pagination-input"
+          title="Masukkan nomor halaman"
         />
-        <span>DARI {totalPages.toLocaleString()}</span>
       </div>
     </div>
   );

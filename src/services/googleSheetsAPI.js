@@ -1,5 +1,9 @@
 // Google Sheets API dengan parameter dinamis
 
+// Default values untuk spreadsheet yang akan digunakan
+export const DEFAULT_SPREADSHEET_ID = '1GlSR2ISC-B75n5Fml59-9f-bzjj4Ks5r';
+export const DEFAULT_SHEET_ID = '2121251766';
+
 // Method 1: Menggunakan Google Sheets sebagai JSON (Public access)
 export const fetchGoogleSheetsDataPublic = async (spreadsheetId, sheetId = '0') => {
   try {
@@ -277,7 +281,3 @@ export const fetchGoogleSheetsData = async (spreadsheetId, sheetId = '0') => {
     }
   }
 };
-
-// Default values untuk spreadsheet contoh
-export const DEFAULT_SPREADSHEET_ID = '1naNH3b2tlE9A57hX_osidJEsP1nFfBeY';
-export const DEFAULT_SHEET_ID = '2121251766';

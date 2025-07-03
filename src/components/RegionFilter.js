@@ -1,32 +1,54 @@
 import React from 'react';
 
-const RegionFilter = ({ businesses, selectedRegion, onRegionChange }) => {
-  // Dapatkan daftar wilayah unik
-  const regions = [...new Set(businesses.map(b => {
-    if (b.kabupaten) return b.kabupaten;
-    if (b.kecamatan) return b.kecamatan;
-    if (b.propinsi) return b.propinsi;
-    return '';
-  }).filter(Boolean))].sort();
-
-  if (regions.length === 0) return null;
-
+const RegionFilter = ({ 
+  kecamatanList, 
+  selectedKecamatan, 
+  onKecamatanChange,
+  desaList,
+  selectedDesa,
+  onDesaChange 
+}) => {
   return (
-    <div className="region-filter">
-      <label htmlFor="region-select">Filter Wilayah:</label>
-      <select 
-        id="region-select"
-        value={selectedRegion} 
-        onChange={(e) => onRegionChange(e.target.value)}
-        className="region-select"
-      >
-        <option value="all">Semua Wilayah</option>
-        {regions.map(region => (
-          <option key={region} value={region}>
-            {region}
-          </option>
-        ))}
-      </select>
+    <div className="filters-row">
+      {/* Filter Kecamatan */}
+      {kecamatanList.length > 0 && (
+        <div className="kecamatan-filter">
+          <label htmlFor="kecamatan-select">FILTER KECAMATAN:</label>
+          <select 
+            id="kecamatan-select"
+            value={selectedKecamatan} 
+            onChange={(e) => onKecamatanChange(e.target.value)}
+            className="kecamatan-select"
+          >
+            <option value="all">SEMUA KECAMATAN</option>
+            {kecamatanList.map(kecamatan => (
+              <option key={kecamatan} value={kecamatan}>
+                {kecamatan}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Filter Desa/Kelurahan */}
+      {desaList.length > 0 && (
+        <div className="desa-filter">
+          <label htmlFor="desa-select">FILTER DESA/KELURAHAN:</label>
+          <select 
+            id="desa-select"
+            value={selectedDesa} 
+            onChange={(e) => onDesaChange(e.target.value)}
+            className="desa-select"
+          >
+            <option value="all">SEMUA DESA/KELURAHAN</option>
+            {desaList.map(desa => (
+              <option key={desa} value={desa}>
+                {desa}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
 };

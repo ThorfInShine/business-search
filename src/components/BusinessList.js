@@ -1,8 +1,7 @@
 import React, { memo, useRef, useEffect } from 'react';
 
-const BusinessCard = memo(({ business, isSelected, onSelect }) => {
+const BusinessCard = memo(({ business, isSelected, onSelect, onEdit, onDelete, canEdit, useDatabase }) => {
   const handleCardClick = (e) => {
-    // Pastikan tidak ada event bubbling
     e.preventDefault();
     e.stopPropagation();
     onSelect(business);
@@ -10,7 +9,7 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
 
   const handleActionClick = (e, action, value) => {
     e.preventDefault();
-    e.stopPropagation(); // Penting: stop propagation
+    e.stopPropagation();
     
     switch (action) {
       case 'phone':
@@ -20,8 +19,10 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
         window.open(`mailto:${value}`);
         break;
       case 'maps':
-        if (business.latitude && business.longitude) {
-          window.open(`https://maps.google.com/?q=${business.latitude},${business.longitude}`, '_blank');
+        const lat = business.latitude || business.lat;
+        const lng = business.longitude || business.lng;
+        if (lat && lng) {
+          window.open(`https://maps.google.com/?q=${lat},${lng}`, '_blank');
         }
         break;
       default:
@@ -29,18 +30,45 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
     }
   };
 
+  const handleEdit = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onEdit(business);
+  };
+
+  const handleDelete = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onDelete(business);
+  };
+
   // Fungsi untuk mendapatkan class status
   const getStatusClass = (status) => {
     switch (status) {
-      case 'Sudah':
-        return 'status-completed';
-      case 'Progress':
-        return 'status-progress';
-      case 'Belum':
+      case 'BUKA':
+        return 'status-open';
+      case 'TUTUP':
+        return 'status-closed';
       default:
-        return 'status-pending';
+        return 'status-unknown';
     }
   };
+
+  // Get the correct field names based on data source
+  const getName = () => business.nama_usaha || business.namaUsaha;
+  const getJenisUsaha = () => business.jenis_usaha || business.jenisUsaha;
+  const getAlamat = () => business.alamat_lengkap || business.alamatLengkap || business.alamat;
+  const getKecamatan = () => business.kecamatan;
+  const getDesa = () => business.desa;
+  const getKontak = () => business.nmsls_parsed || business.nmslsParsed || business.nmsls;
+  const getTelp = () => business.no_telp || business.noTelp;
+  const getEmail = () => business.email;
+  const getKegiatan = () => business.kegiatan;
+  const getStatusToko = () => business.status_toko || business.statusToko;
+  const getPetugas = () => business.nama_petugas || business.namaPetugas;
+  const getRt = () => business.rt;
+  const getRw = () => business.rw;
+  const getDusun = () => business.dusun;
 
   return (
     <div 
@@ -49,21 +77,21 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
     >
       <div className="business-header">
         <div className="business-title-section">
-          <h3 className="business-name">{business.namaUsaha}</h3>
+          <h3 className="business-name">{getName()}</h3>
           {/* Status Badge */}
           <div className="status-info">
-            <span className={`status-badge ${getStatusClass(business.statusEntri)}`}>
-              {business.statusEntri || 'Belum'}
+            <span className={`status-badge ${getStatusClass(getStatusToko())}`}>
+              {getStatusToko() || 'BUKA'}
             </span>
-            {business.namaPetugas && (
+            {getPetugas() && (
               <span className="petugas-info">
-                👤 {business.namaPetugas}
+                👤 {getPetugas()}
               </span>
             )}
           </div>
         </div>
-        {business.jenisUsaha && (
-          <span className="business-category">{business.jenisUsaha}</span>
+        {getJenisUsaha() && (
+          <span className="business-category">{getJenisUsaha()}</span>
         )}
       </div>
 
@@ -72,7 +100,7 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
           <div className="info-item">
             <span className="info-label">📍 ALAMAT</span>
             <span className="info-value">
-              {business.alamatLengkap || business.alamat || '-'}
+              {getAlamat() || '-'}
             </span>
           </div>
           
@@ -80,27 +108,27 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
             <span className="info-label">🏘️ LOKASI</span>
             <span className="info-value">
               {[
-                business.rt && `RT ${business.rt}`,
-                business.rw && `RW ${business.rw}`,
-                business.dusun && `${business.dusun}`
+                getRt() && `RT ${getRt()}`,
+                getRw() && `RW ${getRw()}`,
+                getDusun() && `${getDusun()}`
               ].filter(Boolean).join(', ') || 
-              [business.desa, business.kecamatan].filter(Boolean).join(', ') || '-'}
+              [getDesa(), getKecamatan()].filter(Boolean).join(', ') || '-'}
             </span>
           </div>
 
           <div className="info-item">
             <span className="info-label">🏛️ WILAYAH</span>
             <span className="info-value">
-              {[business.kecamatan, business.kabupaten].filter(Boolean).join(', ') || '-'}
+              {[getKecamatan(), business.kabupaten].filter(Boolean).join(', ') || '-'}
             </span>
           </div>
 
           {/* Tampilkan kegiatan jika ada */}
-          {business.kegiatan && (
+          {getKegiatan() && (
             <div className="info-item">
               <span className="info-label">🔧 KEGIATAN</span>
               <span className="info-value">
-                {business.kegiatan}
+                {getKegiatan()}
               </span>
             </div>
           )}
@@ -110,71 +138,99 @@ const BusinessCard = memo(({ business, isSelected, onSelect }) => {
           <div className="info-item">
             <span className="info-label">👤 KONTAK PERSON</span>
             <span className="info-value">
-              {business.nmslsParsed || business.nmsls || '-'}
+              {getKontak() || '-'}
             </span>
           </div>
 
           <div className="info-item">
             <span className="info-label">📞 TELEPON</span>
             <span className="info-value">
-              {business.noTelp || '-'}
+              {getTelp() || '-'}
             </span>
           </div>
 
           <div className="info-item">
             <span className="info-label">📧 EMAIL</span>
             <span className="info-value">
-              {business.email || '-'}
+              {getEmail() || '-'}
             </span>
           </div>
         </div>
       </div>
 
       <div className="business-actions">
-        {business.noTelp && (
+        {getTelp() && (
           <button 
             className="action-btn phone-btn"
-            onClick={(e) => handleActionClick(e, 'phone', business.noTelp)}
+            onClick={(e) => handleActionClick(e, 'phone', getTelp())}
             title="Telepon"
-            aria-label={`Telepon ${business.namaUsaha}`}
+            aria-label={`Telepon ${getName()}`}
           >
             📞
           </button>
         )}
-        {business.email && (
+        {getEmail() && (
           <button 
             className="action-btn email-btn"
-            onClick={(e) => handleActionClick(e, 'email', business.email)}
+            onClick={(e) => handleActionClick(e, 'email', getEmail())}
             title="Email"
-            aria-label={`Email ${business.namaUsaha}`}
+            aria-label={`Email ${getName()}`}
           >
             📧
           </button>
         )}
-        {business.latitude && business.longitude && (
+        {(business.latitude || business.lat) && (business.longitude || business.lng) && (
           <button 
             className="action-btn maps-btn"
             onClick={(e) => handleActionClick(e, 'maps')}
             title="Lihat di Peta"
-            aria-label={`Lihat ${business.namaUsaha} di Peta`}
+            aria-label={`Lihat ${getName()} di Peta`}
           >
             🗺️
           </button>
         )}
         <button 
           className="action-btn detail-btn"
-          onClick={handleCardClick} // Gunakan handleCardClick yang sama
+          onClick={handleCardClick}
           title="Lihat Detail"
-          aria-label={`Lihat detail ${business.namaUsaha}`}
+          aria-label={`Lihat detail ${getName()}`}
         >
           👁️
         </button>
       </div>
+
+      {/* Edit/Delete buttons for authenticated users */}
+      {canEdit && useDatabase && (
+        <div className="business-card-actions">
+          <button 
+            className="edit-business-btn"
+            onClick={handleEdit}
+            title="Edit Usaha"
+          >
+            ✏️ Edit
+          </button>
+          <button 
+            className="delete-business-btn"
+            onClick={handleDelete}
+            title="Hapus Usaha"
+          >
+            🗑️ Hapus
+          </button>
+        </div>
+      )}
     </div>
   );
 });
 
-const BusinessList = ({ businesses, selectedBusiness, onSelectBusiness }) => {
+const BusinessList = ({ 
+  businesses, 
+  selectedBusiness, 
+  onSelectBusiness, 
+  onEditBusiness, 
+  onDeleteBusiness, 
+  canEdit = false,
+  useDatabase = false 
+}) => {
   const listRef = useRef(null);
 
   // Scroll to top when businesses change (new page)
@@ -198,12 +254,19 @@ const BusinessList = ({ businesses, selectedBusiness, onSelectBusiness }) => {
 
   return (
     <div className="business-list" ref={listRef}>
-      {businesses.map((business) => (
+      {businesses.map((business, index) => (
         <BusinessCard
-          key={business.id}
+          key={business.id || `${business.namaUsaha || business.nama_usaha}-${index}`}
           business={business}
-          isSelected={selectedBusiness?.id === business.id}
+          isSelected={selectedBusiness && (
+            selectedBusiness.id === business.id || 
+            (selectedBusiness.namaUsaha || selectedBusiness.nama_usaha) === (business.namaUsaha || business.nama_usaha)
+          )}
           onSelect={onSelectBusiness}
+          onEdit={onEditBusiness}
+          onDelete={onDeleteBusiness}
+          canEdit={canEdit}
+          useDatabase={useDatabase}
         />
       ))}
     </div>

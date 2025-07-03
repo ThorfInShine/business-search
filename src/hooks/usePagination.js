@@ -1,22 +1,12 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 
-export const usePagination = (data, itemsPerPage = 1000) => {
+export const usePagination = (totalItems, itemsPerPage = 20, onPageChange = null) => {
   const [currentPage, setCurrentPage] = useState(1);
-  const businessListRef = useRef(null);
   const isDetailOpenRef = useRef(false);
-  const dataLengthRef = useRef(0);
 
   // Calculate pagination values
-  const totalItems = data.length;
   const totalPages = Math.ceil(totalItems / itemsPerPage);
   
-  // Get current page data
-  const currentData = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return data.slice(startIndex, endIndex);
-  }, [data, currentPage, itemsPerPage]);
-
   // Scroll business list to top
   const scrollBusinessListToTop = useCallback((force = false) => {
     if (isDetailOpenRef.current && !force) {
@@ -54,45 +44,31 @@ export const usePagination = (data, itemsPerPage = 1000) => {
       console.log(`Changing page from ${currentPage} to ${newPage}`);
       setCurrentPage(newPage);
       
+      // Call onPageChange if provided (for server-side pagination)
+      if (onPageChange) {
+        onPageChange(newPage);
+      }
+      
       setTimeout(() => {
         scrollBusinessListToTop();
       }, 100);
     }
-  }, [currentPage, totalPages, scrollBusinessListToTop]);
+  }, [currentPage, totalPages, onPageChange, scrollBusinessListToTop]);
 
-  // Reset pagination - HANYA jika dipaksa atau data length berubah drastis
+  // Reset pagination
   const resetPagination = useCallback((force = false) => {
-    const dataLengthChanged = Math.abs(dataLengthRef.current - totalItems) > 100;
-    
-    if (!force && !dataLengthChanged && isDetailOpenRef.current) {
+    if (!force && isDetailOpenRef.current) {
       console.log('Skipping pagination reset - detail is open');
       return;
     }
     
-    console.log('Resetting pagination to page 1', { force, dataLengthChanged });
-    dataLengthRef.current = totalItems;
+    console.log('Resetting pagination to page 1', { force });
     setCurrentPage(1);
     
     setTimeout(() => {
       scrollBusinessListToTop(true);
     }, 100);
-  }, [totalItems, scrollBusinessListToTop]);
-
-  // TAMBAHAN: Fungsi untuk restore pagination ke halaman tertentu
-  const restorePagination = useCallback((pageNumber) => {
-    const targetPage = parseInt(pageNumber);
-    
-    if (isNaN(targetPage) || targetPage < 1 || targetPage > totalPages) {
-      console.warn(`Cannot restore to invalid page: ${pageNumber}. Staying on page 1.`);
-      setCurrentPage(1);
-      return;
-    }
-    
-    console.log(`Restoring pagination to page ${targetPage}`);
-    setCurrentPage(targetPage);
-    
-    // Jangan scroll otomatis saat restore
-  }, [totalPages]);
+  }, [scrollBusinessListToTop]);
 
   // Set detail status
   const setDetailOpen = useCallback((isOpen) => {
@@ -100,7 +76,7 @@ export const usePagination = (data, itemsPerPage = 1000) => {
     isDetailOpenRef.current = isOpen;
   }, []);
 
-  // Auto-adjust page if exceeds total pages - HANYA jika tidak ada detail yang terbuka
+  // Auto-adjust page if exceeds total pages
   useMemo(() => {
     if (currentPage > totalPages && totalPages > 0 && !isDetailOpenRef.current) {
       console.log(`Auto-adjusting page from ${currentPage} to ${totalPages}`);
@@ -116,12 +92,10 @@ export const usePagination = (data, itemsPerPage = 1000) => {
     currentPage,
     totalPages,
     totalItems,
-    currentData,
     handlePageChange,
     resetPagination,
-    restorePagination, // TAMBAHAN: export fungsi restore
+    setCurrentPage,
     itemsPerPage,
-    businessListRef,
     scrollBusinessListToTop,
     setDetailOpen
   };

@@ -1,55 +1,87 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchCSVData, parseUploadedCSV, fetchCSVDataWithCacheBust } from './services/csvService';
+import { fetchCSVData } from './services/csvService';
 import { 
   processCSVData, 
   searchBusinesses, 
-  filterByCategory, 
-  getUniqueCategories 
+  filterByKecamatan,
+  filterByDesa,
+  getUniqueKecamatan,
+  getUniqueDesa
 } from './utils/dataProcessor';
+import { DEFAULT_SPREADSHEET_ID, DEFAULT_SHEET_ID } from './services/googleSheetsAPI';
 import { usePagination } from './hooks/usePagination';
+import { businessService } from './services/businessService';
+import { authService } from './services/authService';
+import { migrationService } from './services/migrationService';
+import { backgroundCache } from './services/backgroundCache';
 import BusinessList from './components/BusinessList';
 import BusinessDetail from './components/BusinessDetail';
+import BusinessForm from './components/BusinessForm';
 import SearchBar from './components/SearchBar';
-import CategoryFilter from './components/CategoryFilter';
-import FileUpload from './components/FileUpload';
-import SpreadsheetUrlInput from './components/SpreadsheetUrlInput';
+import RegionFilter from './components/RegionFilter';
 import Pagination from './components/Pagination';
 import LoadingOverlay from './components/LoadingOverlay';
+import AuthModal from './components/AuthModal';
+import DuplicateManager from './components/DuplicateManager';
+import AdminPanel from './components/AdminPanel';
 import './App.css';
 
 const App = () => {
   const [allBusinesses, setAllBusinesses] = useState([]);
-  const [filteredBusinesses, setFilteredBusinesses] = useState([]);
+  const [currentPageData, setCurrentPageData] = useState([]);
   const [selectedBusiness, setSelectedBusiness] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [categories, setCategories] = useState([]);
+  const [selectedKecamatan, setSelectedKecamatan] = useState('all');
+  const [selectedDesa, setSelectedDesa] = useState('all');
+  const [kecamatanList, setKecamatanList] = useState([]);
+  const [desaList, setDesaList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [dataSource, setDataSource] = useState(null);
   const [customSpreadsheet, setCustomSpreadsheet] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState({ message: '', progress: 0 });
+  const [totalCount, setTotalCount] = useState(0);
+
+  // Database-related states
+  const [user, setUser] = useState(null);
+  const [useDatabase, setUseDatabase] = useState(true);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showBusinessForm, setShowBusinessForm] = useState(false);
+  const [editingBusiness, setEditingBusiness] = useState(null);
+  
+  // Duplicate Manager state
+  const [showDuplicateManager, setShowDuplicateManager] = useState(false);
+  
+  // Admin Panel state
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
 
   // Ref untuk melacak apakah detail sedang terbuka
   const isDetailOpenRef = useRef(false);
-  const lastFilterStateRef = useRef({ searchTerm: '', selectedCategory: 'all' });
 
-  // Pagination hook dengan 1000 items per page
+  // Ref untuk mencegah infinite loop
+  const isLoadingRef = useRef(false);
+  const dataLoadedRef = useRef(false);
+
+  // Pagination hook with server-side support
   const {
     currentPage,
     totalPages,
     totalItems,
-    currentData,
-    handlePageChange,
+    handlePageChange: handlePaginationChange,
     resetPagination,
-    restorePagination,
     itemsPerPage,
     scrollBusinessListToTop,
     setDetailOpen
-  } = usePagination(filteredBusinesses, 1000);
+  } = usePagination(totalCount, 20, async (page) => {
+    await loadPageData(page, {
+      search: searchTerm,
+      kecamatan: selectedKecamatan,
+      desa: selectedDesa
+    });
+  });
 
   // Dark mode effect
   useEffect(() => {
@@ -67,6 +99,200 @@ const App = () => {
     setIsInitialized(true);
   }, []);
 
+  // NEW: Load page data with caching
+  const loadPageData = useCallback(async (page, filters) => {
+    try {
+      // Check cache first
+      const cached = backgroundCache.getFromCache(page, filters);
+      if (cached) {
+        console.log(`📦 Using cached data for page ${page}`);
+        setCurrentPageData(cached.data);
+        setTotalCount(cached.total);
+        return;
+      }
+
+      setPageLoading(true);
+      
+      const result = await businessService.getBusinessesPaginated(page, 20, filters);
+      setCurrentPageData(result.data);
+      setTotalCount(result.total);
+      
+      // Start background preloading
+      setTimeout(() => {
+        backgroundCache.preloadNextPages(page, filters, result.totalPages);
+      }, 500);
+      
+    } catch (error) {
+      console.error('Error loading page:', error);
+      setError(`Gagal memuat data: ${error.message}`);
+    } finally {
+      setPageLoading(false);
+    }
+  }, []);
+
+  // NEW: Load initial data quickly
+  const loadInitialData = useCallback(async () => {
+    if (isLoadingRef.current) return;
+
+    try {
+      isLoadingRef.current = true;
+      setLoading(true);
+      setLoadingProgress({ message: 'Memuat data awal...', progress: 10 });
+      
+      // Get just the first page and total count
+      const result = await businessService.getInitialData(20);
+      
+      setCurrentPageData(result.businesses);
+      setTotalCount(result.totalCount);
+      dataLoadedRef.current = true;
+      
+      setLoadingProgress({ message: 'Memuat opsi filter...', progress: 70 });
+      
+      // Load filter options in background
+      setTimeout(async () => {
+        try {
+          const [kecamatanList, desaList] = await Promise.all([
+            businessService.getUniqueValues('kecamatan'),
+            businessService.getUniqueValues('desa')
+          ]);
+          
+          setKecamatanList(kecamatanList);
+          setDesaList(desaList);
+        } catch (error) {
+          console.error('Error loading filter options:', error);
+        }
+      }, 100);
+      
+      setLoadingProgress({ message: 'Selesai!', progress: 100 });
+      console.log(`✅ Initial load completed: ${result.businesses.length} businesses shown, ${result.totalCount} total`);
+      
+    } catch (error) {
+      console.error('Error in initial load:', error);
+      setError(`Gagal memuat data: ${error.message}`);
+    } finally {
+      setLoading(false);
+      isLoadingRef.current = false;
+      setTimeout(() => setLoadingProgress({ message: '', progress: 0 }), 1000);
+    }
+  }, []);
+
+  // Load data from spreadsheet (fallback)
+  const loadBusinessDataFromSpreadsheet = useCallback(async (spreadsheetId, sheetId) => {
+    if (isLoadingRef.current) return;
+
+    try {
+      isLoadingRef.current = true;
+      setLoading(true);
+      setError(null);
+      setLoadingProgress({ message: 'Mengambil data dari spreadsheet...', progress: 10 });
+      
+      if (!spreadsheetId) {
+        throw new Error('Spreadsheet ID diperlukan');
+      }
+      
+      const rawData = await fetchCSVData(spreadsheetId, sheetId);
+      setLoadingProgress({ message: 'Memproses data spreadsheet...', progress: 50 });
+      
+      const processedData = processCSVData(rawData);
+      setLoadingProgress({ message: 'Menyelesaikan pemrosesan...', progress: 80 });
+      
+      setAllBusinesses(processedData);
+      setCurrentPageData(processedData.slice(0, 20));
+      setTotalCount(processedData.length);
+      setKecamatanList(getUniqueKecamatan(processedData));
+      setDesaList(getUniqueDesa(processedData));
+      setCustomSpreadsheet({ spreadsheetId, sheetId });
+      dataLoadedRef.current = true;
+      
+      setLoadingProgress({ message: 'Selesai!', progress: 100 });
+      console.log(`✅ Memuat ${processedData.length} data usaha dari spreadsheet`);
+      
+    } catch (err) {
+      console.error('Error loading business data:', err);
+      setError(`Gagal memuat data: ${err.message}`);
+    } finally {
+      setLoading(false);
+      isLoadingRef.current = false;
+      setTimeout(() => setLoadingProgress({ message: '', progress: 0 }), 1000);
+    }
+  }, []);
+
+  // Check database status dan auto-migration
+  const checkDatabaseStatus = useCallback(async () => {
+    if (isLoadingRef.current || dataLoadedRef.current) return;
+
+    try {
+      setLoadingProgress({ message: 'Mengecek status database...', progress: 5 });
+      const status = await migrationService.checkDatabaseStatus();
+      
+      if (status.hasData) {
+        console.log('📊 Database has data:', status.count, 'businesses');
+        setUseDatabase(true);
+        await loadInitialData();
+      } else {
+        console.log('📭 Database is empty');
+        setUseDatabase(true); // Tetap gunakan database mode
+        
+        // JANGAN auto-import, hanya load data kosong
+        setCurrentPageData([]);
+        setTotalCount(0);
+        dataLoadedRef.current = true;
+        
+        // Tampilkan pesan bahwa database kosong
+        setError('Database kosong. Gunakan fitur Import Data di Admin Panel untuk mengisi data.');
+      }
+    } catch (error) {
+      console.error('Error checking database status:', error);
+      setError(`Gagal mengecek database: ${error.message}`);
+      setUseDatabase(false);
+      // Fallback ke spreadsheet hanya jika benar-benar error
+      await loadBusinessDataFromSpreadsheet(DEFAULT_SPREADSHEET_ID, DEFAULT_SHEET_ID);
+    } finally {
+      setLoading(false);
+      setTimeout(() => setLoadingProgress({ message: '', progress: 0 }), 1000);
+    }
+  }, [loadInitialData, loadBusinessDataFromSpreadsheet]);
+
+  // Authentication effect
+  useEffect(() => {
+    authService.getCurrentUser().then(setUser);
+    
+    const { data: { subscription } } = authService.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Check database status on mount
+  useEffect(() => {
+    if (isInitialized && !dataLoadedRef.current) {
+      checkDatabaseStatus();
+    }
+  }, [isInitialized, checkDatabaseStatus]);
+
+  // Real-time subscription effect
+  useEffect(() => {
+    if (!useDatabase || !dataLoadedRef.current) return;
+
+    console.log('🔄 Setting up real-time subscription...');
+    
+    const subscription = businessService.subscribeToChanges((payload) => {
+      console.log('📡 Real-time update received:', payload.eventType);
+      // Refresh current page data
+      loadPageData(currentPage, {
+        search: searchTerm,
+        kecamatan: selectedKecamatan,
+        desa: selectedDesa
+      });
+    });
+
+    return () => {
+      console.log('🔌 Unsubscribing from real-time updates');
+      subscription.unsubscribe();
+    };
+  }, [useDatabase, currentPage, searchTerm, selectedKecamatan, selectedDesa, loadPageData]);
+
   // Toggle dark mode
   const toggleDarkMode = () => {
     const newDarkMode = !darkMode;
@@ -81,445 +307,220 @@ const App = () => {
     }
   };
 
-  // Apply filters - HANYA dipanggil saat filter berubah, TIDAK saat detail dibuka/ditutup
-  const applyFilters = useCallback(() => {
-    console.log('applyFilters called', { 
-      searchTerm, 
-      selectedCategory, 
-      isDetailOpen: isDetailOpenRef.current,
-      allBusinessesLength: allBusinesses.length 
-    });
+  // Update desa list ketika kecamatan berubah
+  useEffect(() => {
+    if (!dataLoadedRef.current) return;
 
-    // Jangan apply filter jika tidak ada data
-    if (allBusinesses.length === 0) {
-      return;
-    }
-
-    // Cek apakah filter benar-benar berubah
-    const currentFilterState = { searchTerm, selectedCategory };
-    const lastFilterState = lastFilterStateRef.current;
-    
-    const filtersChanged = 
-      currentFilterState.searchTerm !== lastFilterState.searchTerm ||
-      currentFilterState.selectedCategory !== lastFilterState.selectedCategory;
-
-    // Jika filter tidak berubah, jangan lakukan apa-apa
-    if (!filtersChanged && filteredBusinesses.length > 0) {
-      console.log('Filters unchanged, skipping applyFilters');
-      return;
-    }
-
-    // Update last filter state
-    lastFilterStateRef.current = currentFilterState;
-
-    setPageLoading(false);
-    
-    const shouldShowLoading = allBusinesses.length > 50000;
-    
-    if (shouldShowLoading) {
-      setPageLoading(true);
-    }
-    
-    const timeoutId = setTimeout(() => {
-      try {
-        let filtered = allBusinesses;
-        
-        if (searchTerm.trim()) {
-          filtered = searchBusinesses(filtered, searchTerm);
-        }
-        
-        if (selectedCategory !== 'all') {
-          filtered = filterByCategory(filtered, selectedCategory);
-        }
-        
-        console.log('Setting filtered businesses:', filtered.length);
-        setFilteredBusinesses(filtered);
-        
-        // Reset pagination HANYA jika filter berubah
-        if (filtersChanged) {
-          console.log('Resetting pagination due to filter change');
-          resetPagination(true);
-        }
-        
-        // Scroll to top after filtering HANYA jika tidak ada detail yang terbuka
-        if (!isDetailOpenRef.current) {
-          setTimeout(() => {
-            scrollBusinessListToTop();
-          }, 200);
-        }
-        
-      } catch (error) {
-        console.error('Error applying filters:', error);
-      } finally {
-        setPageLoading(false);
+    if (useDatabase) {
+      if (selectedKecamatan !== 'all') {
+        businessService.getBusinesses({ kecamatan: selectedKecamatan })
+          .then(businesses => {
+            const uniqueDesa = [...new Set(businesses.map(b => b.desa).filter(Boolean))].sort();
+            setDesaList(uniqueDesa);
+          })
+          .catch(console.error);
+      } else {
+        businessService.getUniqueValues('desa')
+          .then(setDesaList)
+          .catch(console.error);
       }
-    }, shouldShowLoading ? 50 : 0);
-
-    return () => {
-      clearTimeout(timeoutId);
-      setPageLoading(false);
-    };
-  }, [allBusinesses, searchTerm, selectedCategory, filteredBusinesses.length, resetPagination, scrollBusinessListToTop]);
-
-  // Effect untuk apply filters - HANYA trigger saat filter berubah
-  useEffect(() => {
-    if (allBusinesses.length > 0) {
-      console.log('Filter effect triggered');
-      const cleanup = applyFilters();
-      return cleanup;
+    } else {
+      if (allBusinesses.length > 0) {
+        const newDesaList = getUniqueDesa(allBusinesses, selectedKecamatan);
+        setDesaList(newDesaList);
+        
+        if (selectedKecamatan !== 'all' && selectedDesa !== 'all') {
+          if (!newDesaList.includes(selectedDesa)) {
+            setSelectedDesa('all');
+          }
+        }
+      }
     }
-  }, [searchTerm, selectedCategory, allBusinesses.length]);
+  }, [selectedKecamatan, useDatabase, allBusinesses.length, selectedDesa]);
 
-  // Effect terpisah untuk inisialisasi data
-  useEffect(() => {
-    if (allBusinesses.length > 0 && filteredBusinesses.length === 0) {
-      console.log('Initializing filtered businesses');
-      setFilteredBusinesses(allBusinesses);
-    }
-  }, [allBusinesses]);
+  const handleCloseBusiness = useCallback(() => {
+    console.log('Closing business detail');
+    isDetailOpenRef.current = false;
+    setDetailOpen(false);
+    setSelectedBusiness(null);
+  }, [setDetailOpen]);
 
-  // Handle escape key to close detail panel
+  // Handle escape key
   useEffect(() => {
     const handleEscape = (e) => {
-      if (e.key === 'Escape' && selectedBusiness) {
-        handleCloseBusiness();
+      if (e.key === 'Escape') {
+        if (selectedBusiness) {
+          handleCloseBusiness();
+        }
+        if (showBusinessForm) {
+          setShowBusinessForm(false);
+          setEditingBusiness(null);
+        }
+        if (showAuthModal) {
+          setShowAuthModal(false);
+        }
+        if (showDuplicateManager) {
+          setShowDuplicateManager(false);
+        }
+        if (showAdminPanel) {
+          setShowAdminPanel(false);
+        }
       }
     };
 
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [selectedBusiness]);
+  }, [selectedBusiness, showBusinessForm, showAuthModal, showDuplicateManager, showAdminPanel, handleCloseBusiness]);
 
-  // Fungsi load data yang mempertahankan state
-  const loadBusinessDataPreserveState = async (spreadsheetId, sheetId, preservedState = null) => {
-    try {
-      setLoading(true);
-      setPageLoading(false);
-      setError(null);
-      
-      if (!spreadsheetId) {
-        throw new Error('Spreadsheet ID diperlukan');
-      }
-      
-      const rawData = await fetchCSVData(spreadsheetId, sheetId);
-      const processedData = processCSVData(rawData);
-      
-      setAllBusinesses(processedData);
-      setCategories(getUniqueCategories(processedData));
-      setDataSource('google-sheets');
-      setCustomSpreadsheet({ spreadsheetId, sheetId });
-      
-      // RESTORE STATE jika ada
-      if (preservedState) {
-        console.log('🔄 Restoring preserved state:', preservedState);
-        
-        // Restore filter state tanpa trigger effect
-        lastFilterStateRef.current = { 
-          searchTerm: preservedState.searchTerm, 
-          selectedCategory: preservedState.selectedCategory 
-        };
-        
-        // Set search term dan category langsung tanpa trigger effect
-        setSearchTerm(preservedState.searchTerm);
-        setSelectedCategory(preservedState.selectedCategory);
-        
-        // Restore selected business jika masih ada
-        if (preservedState.selectedBusiness) {
-          const restoredBusiness = processedData.find(
-            business => business.id === preservedState.selectedBusiness.id || 
-                       business.namaUsaha === preservedState.selectedBusiness.namaUsaha
-          );
-          
-          if (restoredBusiness) {
-            setSelectedBusiness(restoredBusiness);
-            isDetailOpenRef.current = preservedState.isDetailOpen;
-            setDetailOpen(preservedState.isDetailOpen);
-          }
-        }
-        
-        // Set timeout untuk restore pagination setelah filter applied
-        setTimeout(() => {
-          if (preservedState.currentPage > 1) {
-            console.log('🔄 Restoring page:', preservedState.currentPage);
-            restorePagination(preservedState.currentPage);
-          }
-        }, 500);
-      } else {
-        // Reset filter state untuk load normal
-        lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
-      }
-      
-      console.log(`Memuat ${processedData.length} data usaha dari spreadsheet`);
-      
-    } catch (err) {
-      console.error('Error loading business data:', err);
-      setError(`Gagal memuat data: ${err.message}`);
-    } finally {
-      setLoading(false);
-      setPageLoading(false);
-    }
-  };
-
-  // Modifikasi fungsi loadBusinessDataWithCacheBust untuk menerima preservedState
-  const loadBusinessDataWithCacheBust = async (spreadsheetId, sheetId, timestamp, preservedState = null) => {
-    try {
-      setLoading(true);
-      setPageLoading(false);
-      setError(null);
-      
-      if (!spreadsheetId) {
-        throw new Error('Spreadsheet ID diperlukan');
-      }
-      
-      console.log('🔄 Force loading with cache bust:', timestamp);
-      
-      // Gunakan fetchCSVData dengan parameter tambahan untuk cache busting
-      const rawData = await fetchCSVDataWithCacheBust(spreadsheetId, sheetId, timestamp);
-      const processedData = processCSVData(rawData);
-      
-      console.log('📊 New data loaded:', processedData.length, 'items');
-      
-      // Log sample untuk debugging
-      if (processedData.length > 0) {
-        const statusCounts = {};
-        processedData.forEach(item => {
-          statusCounts[item.statusEntri] = (statusCounts[item.statusEntri] || 0) + 1;
-        });
-        console.log('📈 Status distribution after refresh:', statusCounts);
-      }
-      
-      // Set data baru
-      setAllBusinesses(processedData);
-      setCategories(getUniqueCategories(processedData));
-      setDataSource('google-sheets');
-      setCustomSpreadsheet({ spreadsheetId, sheetId });
-      
-      // RESTORE STATE jika ada
-      if (preservedState) {
-        console.log('🔄 Restoring preserved state after cache bust:', preservedState);
-        
-        // Restore filter state tanpa trigger effect
-        lastFilterStateRef.current = { 
-          searchTerm: preservedState.searchTerm, 
-          selectedCategory: preservedState.selectedCategory 
-        };
-        
-        // Set search term dan category langsung tanpa trigger effect
-        setSearchTerm(preservedState.searchTerm);
-        setSelectedCategory(preservedState.selectedCategory);
-        
-        // Restore selected business jika masih ada
-        if (preservedState.selectedBusiness) {
-          const restoredBusiness = processedData.find(
-            business => business.id === preservedState.selectedBusiness.id || 
-                       business.namaUsaha === preservedState.selectedBusiness.namaUsaha
-          );
-          
-          if (restoredBusiness) {
-            setSelectedBusiness(restoredBusiness);
-            isDetailOpenRef.current = preservedState.isDetailOpen;
-            setDetailOpen(preservedState.isDetailOpen);
-          }
-        }
-        
-        // Set timeout untuk restore pagination setelah filter applied
-        setTimeout(() => {
-          if (preservedState.currentPage > 1) {
-            console.log('🔄 Restoring page after cache bust:', preservedState.currentPage);
-            restorePagination(preservedState.currentPage);
-          }
-        }, 500);
-      } else {
-        // Reset filter state untuk load normal
-        lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
-      }
-      
-      console.log('✅ Refresh completed successfully');
-      
-    } catch (err) {
-      console.error('❌ Error loading business data:', err);
-      setError(`Gagal memuat data: ${err.message}`);
-    } finally {
-      setLoading(false);
-      setPageLoading(false);
-    }
-  };
-
-  // Load data dari spreadsheet (normal)
-  const loadBusinessData = async (spreadsheetId, sheetId) => {
-    try {
-      setLoading(true);
-      setPageLoading(false);
-      setError(null);
-      
-      if (!spreadsheetId) {
-        throw new Error('Spreadsheet ID diperlukan');
-      }
-      
-      const rawData = await fetchCSVData(spreadsheetId, sheetId);
-      const processedData = processCSVData(rawData);
-      
-      setAllBusinesses(processedData);
-      setCategories(getUniqueCategories(processedData));
-      setDataSource('google-sheets');
-      setCustomSpreadsheet({ spreadsheetId, sheetId });
-      
-      // Reset filter state
-      lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
-      
-      console.log(`Memuat ${processedData.length} data usaha dari spreadsheet`);
-      
-    } catch (err) {
-      console.error('Error loading business data:', err);
-      setError(`Gagal memuat data: ${err.message}`);
-    } finally {
-      setLoading(false);
-      setPageLoading(false);
-    }
-  };
-
-  const handleFileUpload = async (file) => {
-    try {
-      setLoading(true);
-      setPageLoading(false);
-      setError(null);
-      
-      const rawData = await parseUploadedCSV(file);
-      
-      if (!rawData || rawData.length === 0) {
-        throw new Error('File CSV kosong atau tidak dapat dibaca');
-      }
-      
-      const processedData = processCSVData(rawData);
-      
-      if (processedData.length === 0) {
-        throw new Error('Tidak ada data valid yang ditemukan dalam file CSV.');
-      }
-      
-      setAllBusinesses(processedData);
-      setCategories(getUniqueCategories(processedData));
-      setDataSource('upload');
-      setCustomSpreadsheet(null);
-      
-      // Reset filter state
-      lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
-      
-      console.log(`Memuat ${processedData.length} data usaha dari file yang diunggah`);
-      
-    } catch (err) {
-      console.error('Error processing uploaded file:', err);
-      setError(`Gagal memproses file: ${err.message}`);
-    } finally {
-      setLoading(false);
-      setPageLoading(false);
-    }
-  };
-
-  const handleSpreadsheetUrl = (spreadsheetId, sheetId) => {
-    loadBusinessData(spreadsheetId, sheetId);
-  };
-
-  const handleSearch = (term) => {
+  // NEW: Updated filter handlers for server-side pagination
+  const handleSearch = useCallback((term) => {
     console.log('Search term changed:', term);
     setSearchTerm(term);
-  };
+    backgroundCache.clearCache();
+    
+    // Reset to page 1 and load data
+    loadPageData(1, {
+      search: term,
+      kecamatan: selectedKecamatan,
+      desa: selectedDesa
+    });
+  }, [selectedKecamatan, selectedDesa, loadPageData]);
 
-  const handleCategoryChange = (category) => {
-    console.log('Category changed:', category);
-    setSelectedCategory(category);
-  };
+  const handleKecamatanChange = useCallback((kecamatan) => {
+    console.log('Kecamatan changed:', kecamatan);
+    setSelectedKecamatan(kecamatan);
+    if (kecamatan !== selectedKecamatan) {
+      setSelectedDesa('all');
+    }
+    backgroundCache.clearCache();
+    
+    loadPageData(1, {
+      search: searchTerm,
+      kecamatan: kecamatan,
+      desa: 'all'
+    });
+  }, [searchTerm, selectedKecamatan, loadPageData]);
+
+  const handleDesaChange = useCallback((desa) => {
+    console.log('Desa changed:', desa);
+    setSelectedDesa(desa);
+    backgroundCache.clearCache();
+    
+    loadPageData(1, {
+      search: searchTerm,
+      kecamatan: selectedKecamatan,
+      desa: desa
+    });
+  }, [searchTerm, selectedKecamatan, loadPageData]);
 
   const handleSelectBusiness = (business) => {
-    console.log('Selecting business:', business.namaUsaha);
+    console.log('Selecting business:', business.nama_usaha || business.namaUsaha);
     isDetailOpenRef.current = true;
     setDetailOpen(true);
     setSelectedBusiness(business);
   };
 
-  const handleCloseBusiness = () => {
-    console.log('Closing business detail');
-    isDetailOpenRef.current = false;
-    setDetailOpen(false);
-    setSelectedBusiness(null);
+  // Manual refresh function
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    dataLoadedRef.current = false;
+    
+    businessService.invalidateCache();
+    backgroundCache.clearCache();
+    
+    try {
+      setError(null);
+      console.log('🔄 Starting manual refresh...');
+      
+      if (useDatabase) {
+        await loadInitialData();
+      } else {
+        await loadBusinessDataFromSpreadsheet(DEFAULT_SPREADSHEET_ID, DEFAULT_SHEET_ID);
+      }
+      
+      console.log('✅ Manual refresh completed');
+      
+    } catch (error) {
+      console.error('❌ Error during refresh:', error);
+      setError(`Gagal menyinkronkan data: ${error.message}`);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
-  // PERBAIKAN: Fungsi refresh yang mempertahankan halaman dan filter aktif
-  const handleRefresh = async () => {
-    if (dataSource === 'google-sheets' && customSpreadsheet) {
-      setIsRefreshing(true);
+  // Business CRUD handlers
+  const handleAddBusiness = () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setEditingBusiness(null);
+    setShowBusinessForm(true);
+  };
+
+  const handleEditBusiness = (business) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setEditingBusiness(business);
+    setShowBusinessForm(true);
+  };
+
+  const handleDeleteBusiness = async (business) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    if (window.confirm(`Apakah Anda yakin ingin menghapus usaha "${business.nama_usaha || business.namaUsaha}"?`)) {
       try {
-        setError(null);
+        await businessService.deleteBusiness(business.id);
         
-        console.log('🔄 Starting refresh while preserving current state...');
+        // Refresh current page
+        await loadPageData(currentPage, {
+          search: searchTerm,
+          kecamatan: selectedKecamatan,
+          desa: selectedDesa
+        });
         
-        // SIMPAN STATE YANG SEDANG AKTIF
-        const currentState = {
-          currentPage: currentPage,
-          searchTerm: searchTerm,
-          selectedCategory: selectedCategory,
-          selectedBusiness: selectedBusiness,
-          isDetailOpen: isDetailOpenRef.current
-        };
-        
-        console.log('💾 Saving current state:', currentState);
-        
-        // Hanya reset data, TIDAK reset filter dan pagination
-        setAllBusinesses([]);
-        setFilteredBusinesses([]);
-        
-        // Tambahkan timestamp untuk cache busting
-        const timestamp = Date.now();
-        
-        // Tunggu sebentar untuk memastikan state ter-reset
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        try {
-          // Coba dengan cache busting dulu
-          await loadBusinessDataWithCacheBust(
-            customSpreadsheet.spreadsheetId, 
-            customSpreadsheet.sheetId,
-            timestamp,
-            currentState // Pass current state untuk restore nanti
-          );
-        } catch (cacheBustError) {
-          console.warn('🔄 Cache bust failed, trying normal reload...', cacheBustError.message);
-          
-          // Fallback ke load normal jika cache busting gagal
-          await loadBusinessDataPreserveState(
-            customSpreadsheet.spreadsheetId, 
-            customSpreadsheet.sheetId,
-            currentState
-          );
+        if (selectedBusiness && selectedBusiness.id === business.id) {
+          handleCloseBusiness();
         }
         
-        console.log('✅ Refresh completed while preserving state');
-        
+        alert('Usaha berhasil dihapus!');
       } catch (error) {
-        console.error('❌ Error during refresh:', error);
-        setError(`Gagal menyinkronkan data: ${error.message}`);
-      } finally {
-        setIsRefreshing(false);
+        console.error('Error deleting business:', error);
+        alert(`Gagal menghapus usaha: ${error.message}`);
       }
     }
   };
 
-  const resetData = () => {
-    setAllBusinesses([]);
-    setFilteredBusinesses([]);
-    setSelectedBusiness(null);
-    setSearchTerm('');
-    setSelectedCategory('all');
-    setCategories([]);
-    setDataSource(null);
-    setCustomSpreadsheet(null);
-    setPageLoading(false);
-    setIsRefreshing(false);
-    isDetailOpenRef.current = false;
-    setDetailOpen(false);
-    resetPagination(true);
-    lastFilterStateRef.current = { searchTerm: '', selectedCategory: 'all' };
+  const handleSaveBusiness = async (savedBusiness) => {
+    try {
+      // Refresh current page
+      await loadPageData(currentPage, {
+        search: searchTerm,
+        kecamatan: selectedKecamatan,
+        desa: selectedDesa
+      });
+      
+      setShowBusinessForm(false);
+      setEditingBusiness(null);
+      
+      const action = editingBusiness ? 'diperbarui' : 'ditambahkan';
+      alert(`Usaha "${savedBusiness.nama_usaha}" berhasil ${action}!`);
+      
+      if (editingBusiness && selectedBusiness && selectedBusiness.id === editingBusiness.id) {
+        setSelectedBusiness(savedBusiness);
+      }
+      
+    } catch (error) {
+      console.error('Error after saving business:', error);
+    }
   };
 
+  // Force hide loading overlay after timeout
   useEffect(() => {
     if (pageLoading) {
       const forceHideTimeout = setTimeout(() => {
@@ -556,7 +557,18 @@ const App = () => {
 
         <div className="loading">
           <div className="spinner-large"></div>
-          <p>{isRefreshing ? 'Menyinkronkan data...' : 'Memuat data usaha...'}</p>
+          <p>{loadingProgress.message || (isRefreshing ? 'Menyinkronkan data...' : 'Memuat data usaha...')}</p>
+          {loadingProgress.progress > 0 && (
+            <div className="progress-container">
+              <div className="progress-bar">
+                <div 
+                  className="progress-fill" 
+                  style={{ width: `${loadingProgress.progress}%` }}
+                />
+              </div>
+              <span className="progress-text">{loadingProgress.progress}%</span>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -584,39 +596,74 @@ const App = () => {
         <header className="app-header">
           <h1>⚡ DIREKTORI USAHA</h1>
           <p>
-            {allBusinesses.length > 0 
-              ? `Sistem intelijen bisnis canggih yang mengelola ${allBusinesses.length.toLocaleString()} entitas usaha dengan teknologi terdepan`
-              : 'Platform integrasi data bisnis berbasis cloud generasi terbaru'
+            {totalCount > 0 
+              ? `Sistem manajemen data usaha berbasis database dengan ${totalCount.toLocaleString()} entitas usaha`
+              : 'Platform manajemen data usaha berbasis database real-time'
             }
           </p>
           
-          {customSpreadsheet && (
-            <div className="spreadsheet-info">
-              📊 Menggunakan spreadsheet: {customSpreadsheet.spreadsheetId}
-            </div>
-          )}
+          <div className="spreadsheet-info">
+            {useDatabase ? (
+              <>📊 Sumber data: Database Supabase (Real-time) ⚡ Optimized with Caching</>
+            ) : (
+              <>📊 Mode Fallback: Google Sheets</>
+            )}
+          </div>
           
-          {dataSource === 'upload' && (
-            <div className="spreadsheet-info">
-              📂 Menggunakan file CSV lokal
-            </div>
-          )}
-          
-          {dataSource && (
-            <div className="header-actions">
-              {dataSource === 'google-sheets' && customSpreadsheet && (
+          <div className="header-actions">
+            <button 
+              onClick={handleRefresh} 
+              className="refresh-btn"
+              disabled={loading || isRefreshing}
+            >
+              {isRefreshing ? '⏳' : '🔄'} 
+              <span>{isRefreshing ? 'MENYINKRONKAN...' : 'REFRESH DATA'}</span>
+            </button>
+            
+            {user ? (
+              <div className="user-menu">
+                <span className="user-info">👤 {user.email}</span>
                 <button 
-                  onClick={handleRefresh} 
-                  className="refresh-btn"
-                  disabled={loading || isRefreshing}
+                  onClick={() => authService.signOut()}
+                  className="auth-btn signout"
                 >
-                  {isRefreshing ? '⏳' : '🔄'} 
-                  <span>{isRefreshing ? 'MENYINKRONKAN...' : 'SINKRONISASI DATA'}</span>
+                  🚪 Keluar
                 </button>
-              )}
-              <button onClick={resetData} className="reset-btn">
-                🔀 <span>GANTI SUMBER</span>
+              </div>
+            ) : (
+              <button 
+                onClick={() => setShowAuthModal(true)}
+                className="auth-btn signin"
+              >
+                🔐 Masuk
               </button>
+            )}
+          </div>
+
+          {user && (
+            <div className="admin-actions">
+              <button 
+                onClick={handleAddBusiness}
+                className="add-business-btn"
+              >
+                ➕ Tambah Usaha
+              </button>
+              
+              <div className="admin-controls">
+                <button 
+                  onClick={() => setShowAdminPanel(!showAdminPanel)}
+                  className={`admin-panel-btn ${showAdminPanel ? 'active' : ''}`}
+                >
+                  {showAdminPanel ? '❌ Tutup Admin' : '📊 Admin Panel'}
+                </button>
+                
+                <button 
+                  onClick={() => setShowDuplicateManager(!showDuplicateManager)}
+                  className={`duplicate-manager-btn ${showDuplicateManager ? 'active' : ''}`}
+                >
+                  {showDuplicateManager ? '❌ Tutup' : '🔍 Kelola Duplikasi'}
+                </button>
+              </div>
             </div>
           )}
         </header>
@@ -628,24 +675,19 @@ const App = () => {
           </div>
         )}
 
-        {allBusinesses.length === 0 ? (
-          <div className="data-source-selector">
-            <div className="source-option">
-              <h3>🔗 SPREADSHEET KUSTOM</h3>
-              <p>Hubungkan ke Google Sheets Anda sendiri dengan memasukkan link spreadsheet</p>
-              <SpreadsheetUrlInput 
-                onUrlSubmit={handleSpreadsheetUrl}
-                loading={loading}
-              />
-            </div>
-            
-            <div className="source-option">
-              <h3>📂 IMPOR LOKAL</h3>
-              <p>Impor file CSV dari sistem lokal untuk analisis data offline dengan pemrosesan berkecepatan tinggi</p>
-              <FileUpload onFileUpload={handleFileUpload} />
-            </div>
-          </div>
-        ) : (
+        {showAdminPanel && (
+          <AdminPanel 
+            onClose={() => setShowAdminPanel(false)}
+          />
+        )}
+
+        {showDuplicateManager && (
+          <DuplicateManager 
+            onClose={() => setShowDuplicateManager(false)}
+          />
+        )}
+
+        {(totalCount > 0 || useDatabase) && (
           <>
             <div className="filters-container">
               <SearchBar 
@@ -654,31 +696,34 @@ const App = () => {
                 placeholder="Cari usaha, lokasi, kontak, kategori..."
               />
               
-              <CategoryFilter
-                categories={categories}
-                selectedCategory={selectedCategory}
-                onCategoryChange={handleCategoryChange}
+              <RegionFilter
+                kecamatanList={kecamatanList}
+                selectedKecamatan={selectedKecamatan}
+                onKecamatanChange={handleKecamatanChange}
+                desaList={desaList}
+                selectedDesa={selectedDesa}
+                onDesaChange={handleDesaChange}
               />
             </div>
 
-            {totalPages > 1 && (
+            {totalCount > 0 && (
               <Pagination
                 currentPage={currentPage}
                 totalPages={totalPages}
-                totalItems={totalItems}
+                totalItems={totalCount}
                 itemsPerPage={itemsPerPage}
-                onPageChange={handlePageChange}
+                onPageChange={handlePaginationChange}
               />
             )}
 
             <div className="results-summary">
               <div className="summary-stats">
                 <div className="stat-item">
-                  <span className="stat-number">{totalItems.toLocaleString()}</span>
+                  <span className="stat-number">{totalCount.toLocaleString()}</span>
                   <span className="stat-label">TOTAL HASIL</span>
                 </div>
                 <div className="stat-item">
-                  <span className="stat-number">{currentData.length.toLocaleString()}</span>
+                  <span className="stat-number">{currentPageData.length.toLocaleString()}</span>
                   <span className="stat-label">HALAMAN SAAT INI</span>
                 </div>
                 <div className="stat-item">
@@ -687,10 +732,11 @@ const App = () => {
                 </div>
               </div>
               
-              {(searchTerm || selectedCategory !== 'all') && (
+              {(searchTerm || selectedKecamatan !== 'all' || selectedDesa !== 'all') && (
                 <div className="filter-info">
                   {searchTerm && <span className="filter-tag">🔍 "{searchTerm}"</span>}
-                  {selectedCategory !== 'all' && <span className="filter-tag">🏷️ {selectedCategory}</span>}
+                  {selectedKecamatan !== 'all' && <span className="filter-tag">🏛️ {selectedKecamatan}</span>}
+                  {selectedDesa !== 'all' && <span className="filter-tag">🏘️ {selectedDesa}</span>}
                 </div>
               )}
             </div>
@@ -698,16 +744,20 @@ const App = () => {
             <div className="content-container">
               <div className="business-list-container">
                 <BusinessList
-                  businesses={currentData}
+                  businesses={currentPageData}
                   selectedBusiness={selectedBusiness}
                   onSelectBusiness={handleSelectBusiness}
+                  onEditBusiness={handleEditBusiness}
+                  onDeleteBusiness={handleDeleteBusiness}
+                  canEdit={!!user}
+                  useDatabase={useDatabase}
                 />
                 
-                {currentData.length === 0 && filteredBusinesses.length > 0 && (
+                {currentPageData.length === 0 && totalCount > 0 && (
                   <div className="empty-page">
                     <p>Tidak ada data tersedia pada halaman ini</p>
                     <button 
-                      onClick={() => handlePageChange(1)}
+                      onClick={() => handlePaginationChange(1)}
                       className="go-first-btn"
                     >
                       KE HALAMAN PERTAMA
@@ -717,14 +767,14 @@ const App = () => {
               </div>
             </div>
 
-            {totalPages > 1 && (
+            {totalCount > 0 && (
               <div className="pagination-bottom">
                 <Pagination
                   currentPage={currentPage}
                   totalPages={totalPages}
-                  totalItems={totalItems}
+                  totalItems={totalCount}
                   itemsPerPage={itemsPerPage}
-                  onPageChange={handlePageChange}
+                  onPageChange={handlePaginationChange}
                 />
               </div>
             )}
@@ -737,9 +787,34 @@ const App = () => {
           <BusinessDetail 
             business={selectedBusiness}
             onClose={handleCloseBusiness}
+            onEdit={() => handleEditBusiness(selectedBusiness)}
+            onDelete={() => handleDeleteBusiness(selectedBusiness)}
+            canEdit={!!user}
+            useDatabase={useDatabase}
           />
         )}
       </div>
+
+      <AuthModal 
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onAuthSuccess={() => {
+          setShowAuthModal(false);
+        }}
+      />
+
+      {showBusinessForm && (
+        <BusinessForm
+          business={editingBusiness}
+          onSave={handleSaveBusiness}
+          onCancel={() => {
+            setShowBusinessForm(false);
+            setEditingBusiness(null);
+          }}
+          kecamatanList={kecamatanList}
+          desaList={desaList}
+        />
+      )}
     </div>
   );
 };
